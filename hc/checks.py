@@ -626,12 +626,12 @@ def check_log_patterns() -> Section:
     auth_log = _find_auth_log()
 
     checks = [
-        ("OOM Killer",          r"oom.kill|Out of memory",         log_files,  UNHEALTHY),
-        ("Disk I/O Errors",     r"I/O error|EIO|blk_update_request", log_files, UNHEALTHY),
-        ("Kernel Panic",        r"kernel panic|Kernel panic",      log_files,  UNHEALTHY),
+        ("OOM Killer",          r"oom.kill|Out of memory",         log_files,  CAUTION),
+        ("Disk I/O Errors",     r"I/O error|EIO|blk_update_request", log_files, CAUTION),
+        ("Kernel Panic",        r"kernel panic|Kernel panic",      log_files,  CAUTION),
         ("Segmentation Faults", r"segfault|SIGSEGV",               log_files,  CAUTION),
-        ("CPU Machine Check",   r"machine check|MCE.*Bank",        log_files,  UNHEALTHY),
-        ("Filesystem Errors",   r"EXT[234]-fs error|XFS.*error",   log_files,  UNHEALTHY),
+        ("CPU Machine Check",   r"machine check|MCE.*Bank",        log_files,  CAUTION),
+        ("Filesystem Errors",   r"EXT[234]-fs error|XFS.*error",   log_files,  CAUTION),
         ("SSH Brute Force",     r"BREAK-IN ATTEMPT|Invalid user",  auth_log,   CAUTION),
         ("USB Device Added",    r"New USB device found",           log_files,  INFO),
         ("sudo Escalation",     r"sudo.*COMMAND",                  auth_log,   INFO),

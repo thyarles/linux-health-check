@@ -72,8 +72,8 @@ def _build_subject(overall: str, alerts: list, hostname: str) -> str:
     date = datetime.date.today().isoformat()
     ov   = _COLORS.get(overall, _COLORS[OK])
     top  = " | ".join(alerts[:2]) if alerts else ""
-    tag  = "[ALERT]" if overall == UNHEALTHY else "[HEALTH]"
-    base = f"{tag} {hostname} · {date} · {ov['label']}"
+    tag  = f"[{ov['label']}]"
+    base = f"{tag} {hostname} · {date}"
     return f"{base} — {top}" if top else base
 
 

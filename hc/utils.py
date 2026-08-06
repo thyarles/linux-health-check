@@ -18,9 +18,11 @@ def run(cmd: str, timeout: int = 30) -> tuple:
     """Run a shell command; returns (returncode, stdout, stderr)."""
     try:
         r = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=timeout
+            cmd, shell=True, capture_output=True, timeout=timeout
         )
-        return r.returncode, r.stdout.strip(), r.stderr.strip()
+        stdout = r.stdout.decode("utf-8", errors="replace").strip()
+        stderr = r.stderr.decode("utf-8", errors="replace").strip()
+        return r.returncode, stdout, stderr
     except subprocess.TimeoutExpired:
         return -1, "", "timeout"
     except Exception as exc:
