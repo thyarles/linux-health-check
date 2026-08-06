@@ -1,5 +1,6 @@
 import datetime
 import html as _htmllib
+import json
 import socket
 
 from .models import OK, INFO, CAUTION, UNHEALTHY, Section
@@ -151,3 +152,50 @@ def generate_text(sections: list, overall: str) -> str:
 
     lines += ["", "=" * W]
     return "\n".join(lines)
+
+
+def generate_json(sections: list, overall: str) -> str:
+    """Machine-readable JSON dump — for automation, dashboards and log shipping.
+
+    Top level carries hostname, timestamp and overall status; every section
+    includes its rows (label/value/status/detail), alert lines and any tools
+    the check found missing (via Section.need_tool).
+    """
+    now      = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    hostname = socket.getfqdn()
+
+    payload = {
+        "tool":     "linux-health-check",
+        "version":  VERSION,
+        "hostname": hostname,
+        "timestamp": now,
+        "overall":  overall,
+        "sections": [
+            {
+                "title":        sec.title,
+                "status":       sec.status,
+                "alerts":       list(sec.alert_lines),
+                "missing_tools": [
+                    {
+                        "tool":     t["tool"],
+                        "rhel_pkg": t["rhel_pkg"],
+                        "deb_pkg":  t["deb_pkg"],
+                        "optional": t["optional"],
+                    }
+                    for t in sec.missing_tools
+                ],
+                "rows": [
+                    {
+                        "label":  row.label,
+                        "value":  row.value,
+                        "status": row.status,
+                        "detail": row.detail,
+                    }
+                    for row in sec.rows
+                    if not row.is_separator
+                ],
+            }
+            for sec in sections
+        ],
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False)

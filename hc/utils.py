@@ -6,7 +6,8 @@ import shutil
 import socket
 import subprocess
 
-VERSION     = "2.0"
+from . import __version__ as VERSION
+
 SCRIPT_PATH = pathlib.Path(__file__).resolve().parent.parent / "healthcheck.py"
 SCRIPT_DIR  = SCRIPT_PATH.parent
 STATE_DIR   = SCRIPT_DIR / "state"
@@ -115,6 +116,7 @@ def load_config() -> configparser.ConfigParser:
             "host":     "relay.mpt.mp.br",
             "port":     "25",
             "use_tls":  "false",
+            "use_starttls": "false",
             "username": "",
             "password": "",
             "from":     f"healthcheck@{socket.getfqdn()}",
@@ -140,3 +142,49 @@ def load_config() -> configparser.ConfigParser:
     if CONFIG_PATH.exists():
         cfg.read(str(CONFIG_PATH))
     return cfg
+
+
+def validate_config(cfg: configparser.ConfigParser) -> list:
+    """Check the merged config for common mistakes.
+
+    Returns a list of human-readable warning strings. Unknown keys, bad
+    threshold ranges and invalid SMTP ports are reported so a misconfigured
+    first run is visible instead of silently falling back to defaults.
+    """
+    warnings: list = []
+
+    for key in ("cpu_caution", "cpu_unhealthy", "disk_caution",
+                "disk_unhealthy", "ram_caution", "ram_unhealthy"):
+        value = cfg.getfloat("thresholds", key, fallback=None)
+        if value is None:
+            continue
+        if value < 0 or value > 100:
+            warnings.append(
+                f"[thresholds] {key} = {value} is outside the valid range 0-100"
+            )
+
+    for key in ("load_caution_mult", "load_unhealthy_mult"):
+        value = cfg.getfloat("thresholds", key, fallback=None)
+        if value is None:
+            continue
+        if value < 0:
+            warnings.append(f"[thresholds] {key} = {value} must not be negative")
+
+    port = cfg.getint("smtp", "port", fallback=25)
+    if port < 1 or port > 65535:
+        warnings.append(f"[smtp] port = {port} is outside the valid range 1-65535")
+
+    use_tls     = cfg.getboolean("smtp", "use_tls", fallback=False)
+    use_starttls = cfg.getboolean("smtp", "use_starttls", fallback=False)
+    if use_tls and use_starttls:
+        warnings.append(
+            "[smtp] use_tls and use_starttls are both true — use_tls (SMTPS) takes precedence"
+        )
+
+    daily = cfg.get("email", "daily_recipients", fallback="").strip()
+    if not daily:
+        warnings.append(
+            "[email] daily_recipients is empty — no daily report email will be sent"
+        )
+
+    return warnings

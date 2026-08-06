@@ -16,9 +16,12 @@ def install_crontab(time_str: str = "") -> None:
         sys.exit(f"Invalid time '{time_str}'. Use HH:MM (e.g. 07:00).")
 
     hour, minute = m.group(1).zfill(2), m.group(2)
+    if not (0 <= int(hour) <= 23 and 0 <= int(minute) <= 59):
+        sys.exit(f"Invalid time '{time_str}'. Hours must be 00-23, minutes 00-59.")
+
     py3  = shutil.which("python3") or "/usr/bin/python3"
     tag  = "# linux-healthcheck-managed"
-    line = f"{minute} {hour} * * * {py3} {SCRIPT_PATH} run >> /var/log/healthcheck.log 2>&1  {tag}"
+    line = f"{minute} {hour} * * * {py3} {SCRIPT_PATH} run >> /var/log/healthcheck.log 2>&1 {tag}"
 
     rc, current, _ = run("crontab -l 2>/dev/null || true")
     kept = [l for l in current.splitlines() if tag not in l]
