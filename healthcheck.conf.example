@@ -1,0 +1,67 @@
+# healthcheck.conf — Linux Health Check v2.0
+# =============================================================
+# Copy this file to healthcheck.conf in the same directory as
+# healthcheck.py and edit the values below for this server.
+#
+# Each server should have its own healthcheck.conf with the
+# appropriate email recipients for that environment.
+# =============================================================
+
+[smtp]
+# SMTP relay host.
+# Leave blank to use localhost (Postfix must be running and able to relay).
+# MPT default: relay.domain.com on port 25, no authentication required.
+host = relay.domain.com
+port = 25
+
+# Set to true if your relay requires TLS (SMTPS on port 465)
+use_tls = false
+
+# Leave blank if your relay does not require authentication
+username =
+password =
+
+# The From: address that will appear in all emails sent by this script.
+# Adjust to match the sending hostname.
+from = healthcheck@mpt-intra02.domain.com
+
+
+[email]
+# Comma-separated list of recipients for the DAILY health report.
+# This email is sent every day regardless of status (your ops team).
+daily_recipients = user.a@domain.com,
+                   user.b@domain.com,
+                   user.c@domain.com
+
+# Comma-separated list of recipients for ALERT emails.
+# Alert emails are sent ONLY when overall status is CAUTION or UNHEALTHY,
+# or when security events are detected (failed SSH, new SUID files, etc.).
+# Typically your managers or on-call team.
+alert_recipients = user.a@domain.com
+
+
+[thresholds]
+# CPU usage per core — percentage that triggers each level
+cpu_caution   = 80
+cpu_unhealthy = 95
+
+# Disk usage per mount point — percentage that triggers each level
+disk_caution   = 90
+disk_unhealthy = 95
+
+# RAM usage — percentage that triggers each level
+ram_caution   = 80
+ram_unhealthy = 95
+
+# Load average thresholds as a multiplier of the CPU core count.
+# Example on a 4-core machine:
+#   caution   = 1.0 × 4 = 4.00  (load avg ≥ 4.00 → CAUTION)
+#   unhealthy = 2.0 × 4 = 8.00  (load avg ≥ 8.00 → UNHEALTHY)
+load_caution_mult   = 1.0
+load_unhealthy_mult = 2.0
+
+
+[crontab]
+# Default run time used when you call: python3 healthcheck.py crontab
+# You can override it by passing the time as argument: crontab 06:30
+time = 07:00
