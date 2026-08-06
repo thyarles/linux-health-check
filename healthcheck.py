@@ -126,8 +126,8 @@ def main() -> None:
     daily = [r.strip() for r in cfg.get("email", "daily_recipients", fallback="").split(",") if r.strip()]
     send_email(cfg, subject, html, plain, daily)
 
-    # Alert email → managers when caution/unhealthy
-    if overall in (CAUTION, UNHEALTHY):
+    # Alert email → managers only when system needs immediate attention
+    if overall == UNHEALTHY:
         alert_rcpt = [r.strip() for r in cfg.get("email", "alert_recipients", fallback="").split(",") if r.strip()]
         if alert_rcpt:
             send_email(cfg, subject, html, plain, alert_rcpt)
