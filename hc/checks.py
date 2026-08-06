@@ -1,4 +1,5 @@
 import configparser
+import datetime
 import html as _htmllib
 import pathlib
 import re
@@ -12,6 +13,7 @@ from .utils  import load_state, save_state, today_date_re, count_in_log
 def check_system_info() -> Section:
     s = Section("System Information")
     osi = read_os_release()
+    s.add("Date",          datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
     s.add("Hostname",      socket.getfqdn())
     s.add("OS",            osi.get("PRETTY_NAME", "unknown"))
     _, k, _  = run("uname -r")
@@ -638,18 +640,29 @@ def check_log_patterns() -> Section:
     for label, pattern, sources, severity in checks:
         if not sources:
             continue
-        count = 0
+        count       = 0
+        sample_lines = []
         for src in sources.split():
-            if pathlib.Path(src).exists():
-                _, cnt, _ = run(f"grep -ciE '{pattern}' {src} 2>/dev/null || echo 0")
-                try:
-                    count += int(cnt.splitlines()[0])
-                except (ValueError, IndexError):
-                    pass
+            if not pathlib.Path(src).exists():
+                continue
+            _, cnt, _ = run(f"grep -ciE '{pattern}' {src} 2>/dev/null || echo 0")
+            try:
+                n = int(cnt.splitlines()[0])
+            except (ValueError, IndexError):
+                n = 0
+            count += n
+            if n > 0 and not sample_lines:
+                _, raw, _ = run(f"grep -iE '{pattern}' {src} 2>/dev/null | tail -3")
+                if raw:
+                    sample_lines = raw.splitlines()
         st = severity if count > 0 else OK
         s.add(label, f"{count} occurrence(s) in logs", st)
         if count > 0 and severity in (CAUTION, UNHEALTHY):
             s.alert(f"{label}: {count} occurrence(s)", severity)
+            if sample_lines:
+                s.add("── Recent entries ──", "", INFO)
+                for line in sample_lines:
+                    s.add("", line[:120], severity)
 
     return s
 

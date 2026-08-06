@@ -5,6 +5,7 @@ Linux Health Check — v2.0
 Usage:
   healthcheck.py [run]             Run all checks and send emails (default)
   healthcheck.py report            Print HTML report to stdout, no emails sent
+  healthcheck.py text              Print formatted text report to stdout
   healthcheck.py bootstrap         Check and install required system tools
   healthcheck.py crontab [HH:MM]   Install/update crontab entry (default 07:00)
 
@@ -26,7 +27,7 @@ from hc.checks    import (
     check_etc_changes, check_log_patterns, check_rootkit,
     check_network_io, check_tools,
 )
-from hc.report    import generate_html, generate_plain, _COLORS
+from hc.report    import generate_html, generate_plain, generate_text, _COLORS
 from hc.mailer    import send_email
 from hc.bootstrap import bootstrap
 from hc.crontab   import install_crontab
@@ -88,7 +89,7 @@ def main() -> None:
         install_crontab(args[1] if len(args) > 1 else "")
         return
 
-    if mode not in ("run", "report"):
+    if mode not in ("run", "report", "text"):
         print(__doc__)
         sys.exit(1)
 
@@ -100,10 +101,15 @@ def main() -> None:
     print(f"  Overall status: {overall.upper()}", file=sys.stderr)
 
     html  = generate_html(sections, overall)
-    plain = generate_plain(sections, overall)
+    plain = generate_text(sections, overall)
 
     if mode == "report":
         sys.stdout.write(html)
+        return
+
+    if mode == "text":
+        sys.stdout.write(generate_text(sections, overall))
+        sys.stdout.write("\n")
         return
 
     # Save report to disk

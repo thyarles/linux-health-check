@@ -50,10 +50,8 @@ def _section_html(sec: Section) -> str:
     return (
         f'<div style="margin-bottom:20px">'
         f'<div style="background:{c["fg"]};color:#fff;padding:8px 14px;'
-        f'border-radius:4px 4px 0 0;font-size:13px;font-weight:bold;'
-        f'display:flex;justify-content:space-between;align-items:center">'
-        f'<span>{_htmllib.escape(sec.title)}</span>'
-        f'<span style="opacity:.9;font-size:16px">{c["sym"]}</span>'
+        f'border-radius:4px 4px 0 0;font-size:13px;font-weight:bold">'
+        f'{c["sym"]}  {_htmllib.escape(sec.title)}'
         f'</div>'
         f'<table style="width:100%;border-collapse:collapse;'
         f'border:1px solid {c["fg"]};border-top:none">'
@@ -79,16 +77,13 @@ def generate_html(sections: list, overall: str) -> str:
 <body style="font-family:Arial,Helvetica,sans-serif;margin:0;padding:0;background:#f0f0f0">
 <div style="max-width:860px;margin:20px auto;background:#fff;border:1px solid #ccc;border-radius:4px;overflow:hidden">
 
-  <div style="background:#2c3e50;color:#fff;padding:18px 24px">
-    <div style="font-size:10px;opacity:.65;text-transform:uppercase;letter-spacing:.8px">
-      Ministério Público do Trabalho · SPAI
-    </div>
-    <div style="font-size:20px;font-weight:bold;margin:4px 0 2px">Linux Health Check</div>
-    <div style="font-size:13px;opacity:.8">{_htmllib.escape(hostname)} · {now}</div>
+  <div style="padding:20px 24px;border-bottom:1px solid #e0e0e0">
+    <div style="font-size:22px;font-weight:bold;color:#222">Linux Health Check</div>
+    <div style="font-size:12px;color:#888;margin-top:4px">{now}</div>
   </div>
 
-  <div style="background:{ov["bg"]};border-left:5px solid {ov["fg"]};padding:10px 24px;
-              font-size:14px;font-weight:bold;color:{ov["fg"]}">
+  <div style="background:{ov["bg"]};border-left:6px solid {ov["fg"]};padding:20px 24px;
+              font-size:15px;font-weight:bold;color:{ov["fg"]}">
     Overall Status: {ov["label"]}
   </div>
 
@@ -107,6 +102,7 @@ def generate_html(sections: list, overall: str) -> str:
 
 
 def generate_plain(sections: list, overall: str) -> str:
+    """Compact plain text — used for email body."""
     now      = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     hostname = socket.getfqdn()
     lines    = [
@@ -122,4 +118,36 @@ def generate_plain(sections: list, overall: str) -> str:
             else:
                 lines.append(f"  {row.label:<32} {row.value}")
     lines += ["", "=" * 72, f"Linux Health Check v{VERSION}"]
+    return "\n".join(lines)
+
+
+def generate_text(sections: list, overall: str) -> str:
+    """Human-readable terminal report with status symbols and aligned columns."""
+    W        = 76
+    now      = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    hostname = socket.getfqdn()
+    ov       = _COLORS.get(overall, _COLORS[OK])
+
+    lines = [
+        "=" * W,
+        f"  Linux Health Check v{VERSION}  ·  {hostname}  ·  {now}",
+        f"  Overall Status: {ov['sym']}  {overall.upper()}",
+        "=" * W,
+    ]
+
+    for sec in sections:
+        sc = _COLORS.get(sec.status, _COLORS[OK])
+        lines.append("")
+        lines.append(f"  {sc['sym']}  {sec.title}")
+        lines.append("     " + "─" * (W - 5))
+
+        for row in sec.rows:
+            if row.is_separator:
+                lines.append(f"        {row.label}")
+                continue
+            rc     = _COLORS.get(row.status, _COLORS[OK])
+            detail = f"  ({row.detail})" if row.detail else ""
+            lines.append(f"  {rc['sym']}  {row.label:<32} {row.value}{detail}")
+
+    lines += ["", "=" * W]
     return "\n".join(lines)
