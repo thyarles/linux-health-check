@@ -1,6 +1,6 @@
 # Linux Health Check
 
-Daily server health and security monitoring script. Runs all checks, saves an HTML report, and sends emails to two configurable groups: an **operations team** (daily, always) and a **managers/alerts group** (only on failures or security events).
+Daily server health and security monitoring script. Runs all checks, saves an HTML report, and sends emails to two configurable groups: an **operations team** (daily, always) and a **managers/alerts group** (only when the overall status is UNHEALTHY).
 
 Requires only **Python 3** (stdlib — no pip). Supports **RHEL 7+** (yum), **RHEL 8+** (dnf), and **Debian/Ubuntu** (apt-get).
 
@@ -11,7 +11,10 @@ Requires only **Python 3** (stdlib — no pip). Supports **RHEL 7+** (yum), **RH
 | File | Description |
 |------|-------------|
 | `healthcheck.py` | Main script |
+| `hc/` | Package with check, report, mailer, bootstrap and crontab modules |
 | `healthcheck.conf.example` | Config template — copy to `healthcheck.conf` and edit |
+| `tests/` | Pytest suite (101 tests, all shell calls mocked) |
+| `pyproject.toml` | Project metadata, pytest and ruff configuration |
 
 When deployed, the script creates two subdirectories next to itself:
 
@@ -34,7 +37,7 @@ When deployed, the script creates two subdirectories next to itself:
 ```bash
 # 1. Copy files to the server
 mkdir -p /opt/healthcheck
-scp scripts/healthcheck.py scripts/healthcheck.conf.example \
+scp healthcheck.py healthcheck.conf.example \
     root@yourserver:/opt/healthcheck/
 
 # 2. Bootstrap: install dependencies and create directories
@@ -63,18 +66,44 @@ Log output from cron goes to `/var/log/healthcheck.log`.
 ```
 python3 healthcheck.py [run]            Run checks + send emails (cron default)
 python3 healthcheck.py report           Print HTML to stdout, no emails
+python3 healthcheck.py text             Print formatted text report to stdout
+python3 healthcheck.py json             Print machine-readable JSON report to stdout
 python3 healthcheck.py bootstrap        Check/install system tools
 python3 healthcheck.py crontab [HH:MM]  Install/update crontab entry
+python3 healthcheck.py --version        Print version and exit
 ```
+
+### JSON output
+
+`json` mode emits a structured report for automation, dashboards and log
+shipping. Top level carries `hostname`, `timestamp`, `version` and `overall`;
+every section includes its `rows` (label/value/status/detail), `alerts`, and
+any `missing_tools` the check recorded:
+
+```bash
+python3 healthcheck.py json | jq '.overall, .sections[0].title'
+```
+
+### Config validation
+
+Before running checks, the merged config is validated. Common mistakes —
+thresholds outside 0–100, invalid SMTP ports, conflicting `use_tls` /
+`use_starttls` flags, or an empty `daily_recipients` list — are printed as
+`⚠ config:` warnings on stderr so a misconfigured first run is visible instead
+of silently falling back to defaults.
 
 ---
 
 ## Email Groups
 
 | Group | Key in `healthcheck.conf` | When it receives email |
-|-------|--------------------------|----------------------|
+|-------|--------------------------|------------------------|
 | Operations team | `daily_recipients` | Every day, regardless of status |
-| Managers / on-call | `alert_recipients` | Only when overall status is **CAUTION** or **UNHEALTHY**, or when security events are detected |
+| Managers / on-call | `alert_recipients` | Only when overall status is **UNHEALTHY** (immediate attention needed) |
+
+Email subjects are RFC 2047-encoded, so status symbols (✓ ⚠ ✖) survive relay
+without mojibake. The plain-text body of the email is a compact report
+(no terminal formatting).
 
 ---
 
@@ -115,13 +144,14 @@ python3 healthcheck.py crontab [HH:MM]  Install/update crontab entry
 [smtp]
 host = relay.mpt.mp.br   # leave blank to use localhost (Postfix)
 port = 25
-use_tls = false
+use_tls = false          # implicit TLS / SMTPS (port 465)
+use_starttls = false     # STARTTLS upgrade (common on port 587)
 username =               # leave blank if no authentication required
 password =
 from = healthcheck@yourserver.mpt.mp.br
 ```
 
-MPT relay (`relay.mpt.mp.br:25`) requires no authentication. If `host` is left blank, the script connects to `localhost:25` and relies on a local Postfix/sendmail installation.
+MPT relay (`relay.mpt.mp.br:25`) requires no authentication. If `host` is left blank, the script connects to `localhost:25` and relies on a local Postfix/sendmail installation. Modern relays on port 587 usually need `use_starttls = true`.
 
 ---
 
@@ -141,6 +171,21 @@ All thresholds are configurable in `healthcheck.conf` under `[thresholds]`.
 ## First-Run Behaviour
 
 State snapshots (ports, packages, SUID files, crontabs) are created on the first run. Change detection only activates from the **second run** onwards — no false positives on initial deployment.
+
+---
+
+## Development
+
+Run the test suite (no system tools needed — all shell calls are mocked):
+
+```bash
+python3 -m pytest tests/ -v
+```
+
+101 tests cover status aggregation, config parsing and validation, every
+`check_*` function (thresholds, change detection, fallbacks), report
+generation (HTML/text/plain/JSON), SMTP transports (plain / SMTPS / STARTTLS,
+RFC 2047 subjects) and the CLI entry point.
 
 ---
 

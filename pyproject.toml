@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "linux-health-check"
+version = "2.1.0"
+description = "Daily server health and security monitoring script. Runs all checks, saves an HTML report, and sends emails."
+readme = "README.md"
+requires-python = ">=3.6"
+license = { text = "MIT" }
+authors = [{ name = "Charles Santos", email = "thyarles@gmail.com" }]
+keywords = ["monitoring", "security", "health-check", "devops", "sysadmin"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: System :: Monitoring",
+    "Topic :: System :: Systems Administration",
+]
+
+[project.scripts]
+healthcheck = "healthcheck:main"
+
+[tool.setuptools]
+packages = ["hc"]
+py-modules = ["healthcheck"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+python_files = "test_*.py"
+
+[tool.ruff]
+line-length = 100
+target-version = "py36"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]

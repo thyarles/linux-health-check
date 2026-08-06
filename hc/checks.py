@@ -717,8 +717,11 @@ def check_rootkit() -> Section:
 def check_network_io() -> Section:
     s = Section("Network I/O")
 
-    _, out, _ = run("cat /proc/net/dev 2>/dev/null")
-    for line in out.splitlines()[2:]:  # skip 2-line header
+    try:
+        dev_lines = pathlib.Path("/proc/net/dev").read_text().splitlines()
+    except OSError:
+        dev_lines = []
+    for line in dev_lines[2:]:  # skip 2-line header
         parts = line.split()
         if len(parts) < 10:
             continue

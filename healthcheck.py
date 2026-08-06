@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-Linux Health Check — v2.0
+Linux Health Check — v2.1.0
 
 Usage:
   healthcheck.py [run]             Run all checks and send emails (default)
   healthcheck.py report            Print HTML report to stdout, no emails sent
   healthcheck.py text              Print formatted text report to stdout
+  healthcheck.py json              Print machine-readable JSON report to stdout
   healthcheck.py bootstrap         Check and install required system tools
   healthcheck.py crontab [HH:MM]   Install/update crontab entry (default 07:00)
+  healthcheck.py --version         Print version and exit
 
 Config: healthcheck.conf in the same directory as this script.
 Copy healthcheck.conf.example to healthcheck.conf and edit as needed.
@@ -17,8 +19,9 @@ import datetime
 import socket
 import sys
 
+from hc import __version__
 from hc.models    import OK, CAUTION, UNHEALTHY, _worse
-from hc.utils     import load_config, REPORT_DIR
+from hc.utils     import load_config, validate_config, REPORT_DIR
 from hc.checks    import (
     check_system_info, check_cpu, check_memory, check_disk,
     check_processes, check_services, check_docker, check_updates,
@@ -27,7 +30,7 @@ from hc.checks    import (
     check_etc_changes, check_log_patterns, check_rootkit,
     check_network_io, check_tools,
 )
-from hc.report    import generate_html, generate_plain, generate_text, _COLORS
+from hc.report    import generate_html, generate_plain, generate_text, generate_json, _COLORS
 from hc.mailer    import send_email
 from hc.bootstrap import bootstrap
 from hc.crontab   import install_crontab
@@ -81,6 +84,10 @@ def main() -> None:
     args = sys.argv[1:]
     mode = args[0].lower() if args else "run"
 
+    if mode in ("--version", "-v", "version"):
+        print(f"Linux Health Check v{__version__}")
+        return
+
     if mode == "bootstrap":
         bootstrap()
         return
@@ -89,19 +96,22 @@ def main() -> None:
         install_crontab(args[1] if len(args) > 1 else "")
         return
 
-    if mode not in ("run", "report", "text"):
+    if mode not in ("run", "report", "text", "json"):
         print(__doc__)
         sys.exit(1)
 
     cfg      = load_config()
     hostname = socket.getfqdn()
 
+    for warning in validate_config(cfg):
+        print(f"  ⚠ config: {warning}", file=sys.stderr)
+
     print(f"[{datetime.datetime.now():%Y-%m-%d %H:%M:%S}] Running health checks on {hostname}...", file=sys.stderr)
     sections, overall, alerts = run_all_checks(cfg)
     print(f"  Overall status: {overall.upper()}", file=sys.stderr)
 
     html  = generate_html(sections, overall)
-    plain = generate_text(sections, overall)
+    plain = generate_plain(sections, overall)
 
     if mode == "report":
         sys.stdout.write(html)
@@ -109,6 +119,11 @@ def main() -> None:
 
     if mode == "text":
         sys.stdout.write(generate_text(sections, overall))
+        sys.stdout.write("\n")
+        return
+
+    if mode == "json":
+        sys.stdout.write(generate_json(sections, overall))
         sys.stdout.write("\n")
         return
 
@@ -124,6 +139,8 @@ def main() -> None:
 
     # Daily email → operational team (always)
     daily = [r.strip() for r in cfg.get("email", "daily_recipients", fallback="").split(",") if r.strip()]
+    if not daily:
+        print("  ⚠ No daily_recipients configured — no daily email sent.", file=sys.stderr)
     send_email(cfg, subject, html, plain, daily)
 
     # Alert email → managers only when system needs immediate attention

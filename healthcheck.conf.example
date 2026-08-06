@@ -1,4 +1,4 @@
-# healthcheck.conf — Linux Health Check v2.0
+# healthcheck.conf — Linux Health Check v2.1.0
 # =============================================================
 # Copy this file to healthcheck.conf in the same directory as
 # healthcheck.py and edit the values below for this server.
@@ -14,8 +14,12 @@
 host = relay.domain.com
 port = 25
 
-# Set to true if your relay requires TLS (SMTPS on port 465)
+# Set to true if your relay requires implicit TLS (SMTPS on port 465).
 use_tls = false
+
+# Set to true if your relay requires STARTTLS (common on port 587).
+# Ignored when use_tls is also true.
+use_starttls = false
 
 # Leave blank if your relay does not require authentication
 username =
