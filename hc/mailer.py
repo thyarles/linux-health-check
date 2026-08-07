@@ -18,12 +18,14 @@ def send_email(cfg: configparser.ConfigParser, subject: str,
     password = cfg.get("smtp", "password", fallback="").strip()
     from_    = cfg.get("smtp", "from",     fallback=f"healthcheck@{socket.getfqdn()}").strip()
 
-    msg            = MIMEMultipart("alternative")
+    msg            = MIMEMultipart("mixed")
     msg["Subject"] = subject
     msg["From"]    = from_
     msg["To"]      = ", ".join(recipients)
     msg.attach(MIMEText(plain, "plain", "utf-8"))
-    msg.attach(MIMEText(html,  "html",  "utf-8"))
+    html_part = MIMEText(html, "html", "utf-8")
+    html_part.add_header("Content-Disposition", "attachment", filename="health-report.html")
+    msg.attach(html_part)
 
     try:
         conn = smtplib.SMTP_SSL(host, port, timeout=30) if use_tls else smtplib.SMTP(host, port, timeout=30)

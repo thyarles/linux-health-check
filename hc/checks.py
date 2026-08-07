@@ -61,6 +61,9 @@ def check_cpu(cfg: configparser.ConfigParser) -> Section:
 
     if has("mpstat"):
         _, out, _ = run("mpstat -P ALL 1 1 2>/dev/null")
+        # mpstat emits both a live snapshot and "Average:" lines; use a dict so
+        # each cpu_id is recorded only once (last write = the Average: row).
+        cpu_rows: dict = {}
         for line in out.splitlines():
             parts = line.split()
             if len(parts) < 4:
@@ -80,6 +83,11 @@ def check_cpu(cfg: configparser.ConfigParser) -> Section:
                 continue
             used = 100.0 - idle
             st = UNHEALTHY if used >= thr_u else (CAUTION if used >= thr_c else OK)
+            cpu_rows[cpu_id] = (used, st)
+        ordered = (["all"] if "all" in cpu_rows else []) + \
+                  sorted((k for k in cpu_rows if k != "all"), key=int)
+        for cpu_id in ordered:
+            used, st = cpu_rows[cpu_id]
             if st == UNHEALTHY:
                 s.alert(f"CPU {cpu_id} at {used:.0f}%")
             s.add(f"CPU {cpu_id}", f"{used:.1f}% used", st)

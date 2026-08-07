@@ -115,8 +115,8 @@ def main() -> None:
     # Save report to disk
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     ts    = datetime.datetime.now().strftime("%Y%m%d-%H%M")
-    rpath = REPORT_DIR / f"health-{hostname}-{ts}.html"
-    rpath.write_text(html, encoding="utf-8")
+    rpath = REPORT_DIR / f"health-{hostname}-{ts}.txt"
+    rpath.write_text(plain, encoding="utf-8")
     print(f"  Report saved: {rpath}")
 
     subject = _build_subject(overall, alerts, hostname)
