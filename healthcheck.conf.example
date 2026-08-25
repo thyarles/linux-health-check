@@ -78,6 +78,7 @@ forget_after_hours = 72
 # applications churn through random high ports on 127.0.0.1 all day, which is
 # pure noise in a daily report. By default only sockets reachable from the
 # network are listed and diffed. Set true to list the loopback ones too.
+# Whatever is listed is listed in full — the inventory is never truncated.
 list_local_ports = false
 
 # Extra path patterns to skip in the /etc modification scan (comma separated

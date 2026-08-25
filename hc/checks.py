@@ -686,11 +686,13 @@ def check_ports(cfg: configparser.ConfigParser) -> Section:
         s.add("Loopback-only Sockets", f"{len(local)} hidden", INFO,
               detail="set list_local_ports = true in healthcheck.conf to list them")
 
+    # Listed in full, deliberately uncapped. This is the security-relevant
+    # inventory of what the host exposes; truncating it hides exactly what a
+    # reader opened the section to check. Loopback filtering already keeps it
+    # short — the cap is what the list_local_ports flag is for.
     s.add("── Listening Sockets ──", "", INFO)
-    for line in current[:_LIST_CAP]:
+    for line in current:
         s.add("", line, INFO)
-    if len(current) > _LIST_CAP:
-        s.add("…", f"and {len(current) - _LIST_CAP} more socket(s)", INFO)
 
     save_state("ports", current)
     return s
