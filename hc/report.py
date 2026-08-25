@@ -407,7 +407,10 @@ def _row_lines(row) -> list:
     if row.meter is not None:
         value = f"{_text_meter(row.meter)} {value}"
 
-    prefix = f"  {sym}  {label:<{_LABEL_W}} "
+    # Inventory rows carry no label; padding 30 blank columns before the value
+    # just leaves a hole in the middle of the report.
+    prefix = (f"  {sym}  {label:<{_LABEL_W}} " if label
+              else f"  {sym}  ")
     indent = " " * len(prefix)
     val_w  = W - len(prefix)
 

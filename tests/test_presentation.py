@@ -297,3 +297,20 @@ def test_html_sets_every_colour_inline_so_style_stripping_clients_still_work():
     body = html.split("<body", 1)[1]
     assert "style=" in body
     assert _COLORS[CAUTION]["bg"] in body
+
+
+def test_unlabelled_rows_do_not_pad_a_hole_before_the_value():
+    """Inventory rows (ports, log samples) have no label."""
+    s = Section("Listening Sockets")
+    s.add("", "tcp *:443", INFO)
+    line = [l for l in generate_text([s], INFO).splitlines() if "tcp *:443" in l][0]
+    assert line == "  ·  tcp *:443", repr(line)
+
+
+def test_labelled_rows_still_align_in_a_column():
+    s = Section("T")
+    s.add("Kernel", "6.6.0", OK)
+    s.add("Uptime", "3 hours", OK)
+    lines = [l for l in generate_text([s], OK).splitlines()
+             if "6.6.0" in l or "3 hours" in l]
+    assert len({l.index(v) for l, v in zip(lines, ("6.6.0", "3 hours"))}) == 1

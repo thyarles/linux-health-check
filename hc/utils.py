@@ -181,6 +181,15 @@ def load_config() -> configparser.ConfigParser:
             # genuine recurrence notifies again instead of being deduplicated.
             "forget_after_hours":     "72",
         },
+        "checks": {
+            # Listening-port inventory: loopback sockets cannot be reached from
+            # off the host and applications churn through random high ports on
+            # 127.0.0.1. Set true to list them anyway.
+            "list_local_ports": "false",
+            # Extra path patterns to skip in the /etc scan (comma separated).
+            # Backup agents that write timestamped files into /etc belong here.
+            "etc_ignore": "/etc/CommVaultRegistryBackups/*",
+        },
         "thresholds": {
             "cpu_caution":         "80",
             "cpu_unhealthy":       "95",

@@ -1,5 +1,6 @@
 import configparser
 import datetime
+import shlex
 import html as _htmllib
 import pathlib
 import re
@@ -598,6 +599,29 @@ def check_fail2ban(cfg: configparser.ConfigParser) -> Section:
 _PID_RE = re.compile(r",?\s*(pid|fd)=\d+")
 
 
+def _split_hostport(addr: str) -> tuple:
+    """Split 'host:port' handling IPv6 brackets and zone ids.
+
+    Real inputs: '127.0.0.1:6444', '[::1]:323', '127.0.0.53%lo:53', '*:8472'.
+    """
+    if addr.startswith("["):
+        host, _, rest = addr.partition("]")
+        return host[1:], rest.lstrip(":")
+    host, _, port = addr.rpartition(":")
+    return host, port
+
+
+def _is_loopback(addr: str) -> bool:
+    """True when nothing outside this host can reach the socket.
+
+    A wildcard bind ('*', '0.0.0.0', '::') is emphatically NOT loopback — that
+    is the case a reader most needs to see.
+    """
+    host, _ = _split_hostport(addr)
+    host = host.split("%")[0].strip()          # drop the '%lo' zone id
+    return host.startswith("127.") or host in ("::1", "localhost")
+
+
 def _port_key(line: str) -> str:
     """Normalise an ss/netstat line to address + process, dropping pid/fd."""
     line = _PID_RE.sub("", line)
@@ -605,26 +629,40 @@ def _port_key(line: str) -> str:
     return line.rstrip(",")
 
 
-def check_ports() -> Section:
+def check_ports(cfg: configparser.ConfigParser) -> Section:
     s = Section("Listening Ports")
+    # Loopback sockets cannot be reached from off the host, and applications
+    # churn through random high ports on 127.0.0.1, which is pure noise in a
+    # daily report. Set list_local_ports = true to see them anyway.
+    show_local = cfg.getboolean("checks", "list_local_ports", fallback=False)
 
     if has("ss"):
-        _, raw, _ = run("ss -tlnp 2>/dev/null | awk 'NR>1 {print $4, $6}'")
+        _, tcp, _ = run("ss -tlnp 2>/dev/null | awk 'NR>1 {print \"tcp\", $4, $6}'")
+        _, udp, _ = run("ss -ulnp 2>/dev/null | awk 'NR>1 {print \"udp\", $4, $6}'")
     elif has("netstat"):
-        _, raw, _ = run("netstat -tlnp 2>/dev/null | awk 'NR>2 {print $4, $7}'")
+        _, tcp, _ = run("netstat -tlnp 2>/dev/null | awk 'NR>2 {print \"tcp\", $4, $7}'")
+        _, udp, _ = run("netstat -ulnp 2>/dev/null | awk 'NR>2 {print \"udp\", $4, $7}'")
         s.need_tool("ss", rhel_pkg="iproute", deb_pkg="iproute2", optional=True)
     else:
         s.add("ss / netstat", "Neither available", INFO)
         s.need_tool("ss", rhel_pkg="iproute", deb_pkg="iproute2")
         return s
 
-    # The raw ss/netstat line carries pid= and fd=, which change every time a
-    # service restarts. Comparing those made a routine restart look like a new
-    # listening port every single day. Compare address + process name only.
-    current = sorted({_port_key(l) for l in raw.splitlines() if l.strip()})
-    prev    = load_state("ports")
-    if prev is not None:
-        prev = sorted({_port_key(l) for l in prev if str(l).strip()})
+    # The raw line carries pid= and fd=, which change every time a service
+    # restarts. Comparing those made a routine restart look like a new port.
+    entries = [_port_key(l) for l in (tcp + "\n" + udp).splitlines() if l.strip()]
+    entries = [e for e in entries if len(e.split()) >= 2]
+
+    exposed = sorted({e for e in entries if not _is_loopback(e.split()[1])})
+    local   = sorted({e for e in entries if _is_loopback(e.split()[1])})
+    current = sorted(set(exposed + local)) if show_local else exposed
+
+    prev = load_state("ports")
+    # State written before this check covered UDP has no protocol prefix.
+    # Re-baseline instead of reporting every socket on the host as new.
+    if prev is not None and not any(str(p).startswith(("tcp ", "udp ")) for p in prev):
+        s.add("Baseline", "Port list format changed — baseline re-recorded", INFO)
+        prev = None
 
     if prev is not None:
         new_ports = [p for p in current if p not in prev]
@@ -633,7 +671,7 @@ def check_ports() -> Section:
             s.add("── New Ports Since Last Run ──", "", INFO)
             for p in new_ports:
                 s.add("NEW", p, CAUTION)
-                s.alert(f"New listening port: {p.split()[0]}", CAUTION)
+                s.alert(f"New listening port: {' '.join(p.split()[:2])}", CAUTION)
         if del_ports:
             s.add("── Ports No Longer Listening ──", "", INFO)
             for p in del_ports:
@@ -641,15 +679,18 @@ def check_ports() -> Section:
         if not new_ports and not del_ports:
             s.add("Port Changes", "None since last run", OK)
     else:
-        s.add("Baseline", f"{len(current)} ports recorded (first run)", INFO)
+        s.add("Baseline", f"{len(current)} socket(s) recorded (first run)", INFO)
 
-    # The full inventory was 20+ identical rows every day. Changes are what
-    # matter and they are listed above; keep the inventory as a count.
-    s.add("── All Listening Ports ──", "", INFO)
+    s.add("Reachable Sockets", f"{len(exposed)} not bound to loopback", INFO)
+    if not show_local:
+        s.add("Loopback-only Sockets", f"{len(local)} hidden", INFO,
+              detail="set list_local_ports = true in healthcheck.conf to list them")
+
+    s.add("── Listening Sockets ──", "", INFO)
     for line in current[:_LIST_CAP]:
         s.add("", line, INFO)
     if len(current) > _LIST_CAP:
-        s.add("…", f"and {len(current) - _LIST_CAP} more listening socket(s)", INFO)
+        s.add("…", f"and {len(current) - _LIST_CAP} more socket(s)", INFO)
 
     save_state("ports", current)
     return s
@@ -805,7 +846,27 @@ def _boot_time() -> float:
     return 0.0
 
 
-def check_etc_changes() -> Section:
+def _etc_ignore_args(cfg: configparser.ConfigParser) -> str:
+    """Build the -not -path arguments for the /etc scan.
+
+    Backup agents write timestamped files into /etc on a schedule — CommVault
+    drops a new .zst into /etc/CommVaultRegistryBackups every 90 minutes — and
+    each one showed up as a fresh modification. Those are configuration
+    *backups*, not configuration changes.
+    """
+    patterns = [
+        "*/mtab", "*/adjtime", "*/ld.so.cache", "*/resolv.conf",
+        "*/machine-id", "*/.pwd.lock", "*/blkid.tab*",
+        "*/network/interfaces.d/*",
+    ]
+    extra = cfg.get("checks", "etc_ignore", fallback="")
+    patterns += [p.strip() for p in extra.replace("\n", ",").split(",") if p.strip()]
+    # The admin owns healthcheck.conf, but quote anyway — a stray space or
+    # backtick in a pattern must not become part of the command.
+    return " ".join(f"-not -path {shlex.quote(p)}" for p in patterns)
+
+
+def check_etc_changes(cfg: configparser.ConfigParser) -> Section:
     s = Section("/etc Modifications (last 24h)")
 
     exclude = (
@@ -814,14 +875,7 @@ def check_etc_changes() -> Section:
         "-not -name '*.dpkg-*' "
         "-not -name '*.rpmnew' "
         "-not -name '*.rpmsave' "
-        "-not -path '*/mtab' "
-        "-not -path '*/adjtime' "
-        "-not -path '*/ld.so.cache' "
-        "-not -path '*/resolv.conf' "
-        "-not -path '*/machine-id' "
-        "-not -path '*/.pwd.lock' "
-        "-not -path '*/blkid.tab*' "
-        "-not -path '*/network/interfaces.d/*' "
+        + _etc_ignore_args(cfg) + " "
     )
     _, out, _ = run(
         f"find /etc -maxdepth 3 -type f -mmin -1440 {exclude} 2>/dev/null | sort | head -40",
