@@ -578,13 +578,22 @@ def test_no_reboot_means_no_alert(shell, no_state):
     assert alert_messages(section) == []
 
 
-def test_port_inventory_is_capped(cfg, shell, tools, no_state):
+def test_every_listening_socket_is_listed(cfg, shell, tools, no_state):
+    """The socket inventory is never truncated.
+
+    It is the security-relevant list of what the host exposes; an "and N more"
+    line hides precisely what a reader opened the section to check. Loopback
+    filtering is what keeps it short.
+    """
     tools.add("ss")
     no_state["ports"] = ["tcp 0.0.0.0:1 users:((\"x\"))"]
     shell.expect("ss -tlnp", "\n".join(f"tcp 0.0.0.0:{p} users:((\"svc\",pid=1,fd=3))"
                                        for p in range(1000, 1040)))
     section = check_ports(cfg)
-    assert any(r.label == "…" and "more socket" in r.value for r in section.rows)
+    listed = [r for r in section.rows if r.label == "" and r.value]
+    assert len(listed) == 40, f"only {len(listed)} of 40 sockets listed"
+    assert not any(r.label == "…" for r in section.rows)
+    assert any("0.0.0.0:1039" in r.value for r in listed), "the last socket must appear"
 
 
 def test_uninstalled_optional_tools_do_not_get_their_own_section(cfg, shell, tools):

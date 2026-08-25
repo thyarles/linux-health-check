@@ -150,7 +150,10 @@ rows are things anyone should act on**. Everything below serves finding that 1%:
   container name appeared, so mail clients re-wrapped it into a mess.
 - **Summaries instead of inventories.** Per-core CPU is a summary plus only the
   cores over threshold — on a 96-core host that listing alone was 29% of the
-  report. Purely informational lists are capped with an "and N more" line.
+  report. Purely informational lists are capped with an "and N more" line. The
+  one exception is the listening-socket inventory, which is always listed in
+  full: it is the security-relevant record of what the host exposes, and
+  loopback filtering already keeps it short.
 - **Meters and deltas.** Disk and memory rows carry a usage bar and their change
   since the previous run (`+3.0 pts since last run`), because a bare percentage
   does not tell you whether you have days or hours.
@@ -208,6 +211,7 @@ and became unreadable. Half a dark theme is worse than none.
 [checks]
 # List loopback-bound sockets too. Off by default: nothing off the host can
 # reach 127.x / ::1, and applications churn through random high ports there.
+# Whatever is listed is listed in full — the socket inventory is never truncated.
 list_local_ports = false
 
 # Extra path patterns to skip in the /etc scan (comma-separated shell globs).
