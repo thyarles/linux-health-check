@@ -27,17 +27,49 @@ from = healthcheck@mpt-intra02.domain.com
 
 
 [email]
-# Comma-separated list of recipients for the DAILY health report.
-# This email is sent every day regardless of status (your ops team).
-daily_recipients = user.a@domain.com,
-                   user.b@domain.com,
-                   user.c@domain.com
+# ─────────────────────────────────────────────────────────────
+# Two lists, two different purposes. Getting this backwards is
+# what causes alert fatigue, so read this before editing.
+# ─────────────────────────────────────────────────────────────
 
-# Comma-separated list of recipients for ALERT emails.
-# Alert emails are sent ONLY when overall status is CAUTION or UNHEALTHY,
-# or when security events are detected (failed SSH, new SUID files, etc.).
-# Typically your managers or on-call team.
-alert_recipients = user.a@domain.com
+# THE SELECTED GROUP — the small team that wants to know the check
+# itself is alive. They receive a message on EVERY run, even when
+# everything is fine ("[daily] ... all clear"). This is the
+# "the monitoring is working" signal. Keep this list short.
+daily_recipients = ops.a@domain.com,
+                   ops.b@domain.com
+
+# EVERYONE — the broad audience. They are only written to when the
+# run finds something NEW or something that got WORSE (subject is
+# tagged "[ACTION]"). A condition that has already been reported
+# does not notify this list again until it clears, gets worse, or
+# hits the reminder interval below.
+#
+# This is the whole point: if a message reaches this list, it is
+# because something actually changed.
+alert_recipients = team@domain.com,
+                   manager@domain.com
+
+# How the HTML report reaches the reader:
+#   inline     — rendered in the message body (recommended; people read it)
+#   attachment — plain text in the body, HTML as a downloadable file
+#   both       — rendered inline AND attached, for archiving
+html_mode = inline
+
+
+[alerts]
+# Minimum severity that notifies alert_recipients: caution | unhealthy
+notify_all_on = unhealthy
+
+# A condition that is still open gets ONE reminder every N hours.
+# Set to 0 to notify once only, on first sight.
+# Defaults: a week for CAUTION, a day for UNHEALTHY.
+remind_caution_hours = 168
+remind_unhealthy_hours = 24
+
+# Once a condition has been clear for this many hours it is forgotten,
+# so that a genuine recurrence counts as new and notifies again.
+forget_after_hours = 72
 
 
 [thresholds]
@@ -59,6 +91,30 @@ ram_unhealthy = 95
 #   unhealthy = 2.0 × 4 = 8.00  (load avg ≥ 8.00 → UNHEALTHY)
 load_caution_mult   = 1.0
 load_unhealthy_mult = 2.0
+
+# Zombie processes. A few are routine and clear on their own.
+zombie_caution   = 10
+zombie_unhealthy = 50
+
+# Failed SSH attempts TODAY. Any host reachable from the internet sees a
+# constant background level of these, so the defaults are deliberately high.
+failed_ssh_caution   = 50
+failed_ssh_unhealthy = 500
+
+# Pending updates are planned maintenance, not an incident, so by default
+# they are reported as INFO and never notify anyone. Set a number here to
+# raise CAUTION once the backlog passes it (e.g. 100), or leave 0 to disable.
+updates_caution          = 0
+security_updates_caution = 0
+
+# fail2ban bans mean fail2ban is WORKING, so they are informational.
+# Set a number to flag an unusual spike (e.g. 50), or leave 0 to disable.
+banned_ips_caution = 0
+
+# Docker: a container that exited non-zero within this many hours is treated
+# as a fresh crash (CAUTION). Anything stopped longer ago is assumed to have
+# been stopped deliberately and is reported as INFO.
+docker_recent_hours = 24
 
 
 [crontab]

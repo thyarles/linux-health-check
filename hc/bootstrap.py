@@ -56,13 +56,13 @@ def bootstrap() -> None:
         print("\n  All required tools are already installed.")
     elif is_root:
         print(f"\n  Installing {len(missing)} missing tool(s)...")
-        for tool, pkg in missing:
+        for _tool, pkg in missing:
             print(f"    → {pm} install -y {pkg} ... ", end="", flush=True)
             rc, _, err = run(f"{pm} install -y {pkg}", timeout=180)
             print("OK" if rc == 0 else f"FAILED ({err[:60]})")
     else:
         print("\n  ⚠ Not running as root — run these commands manually:\n")
-        for tool, pkg in missing:
+        for _tool, pkg in missing:
             print(f"    sudo {pm} install -y {pkg}")
 
     print()
