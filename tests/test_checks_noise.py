@@ -11,7 +11,8 @@ import os
 import pytest
 
 from hc.checks import (
-    _port_key, _status_age_hours, check_cpu, check_disk, check_docker,
+    _etc_ignore_args, _is_loopback, _port_key, _split_hostport,
+    _status_age_hours, check_cpu, check_disk, check_docker,
     check_etc_changes, check_fail2ban, check_log_patterns, check_ports,
     check_processes, check_rootkit, check_services, check_system_info,
     check_tools, check_updates, check_users,
@@ -232,23 +233,23 @@ def test_port_key_notices_a_different_process_on_the_same_port():
            _port_key('0.0.0.0:80 users:(("evil",pid=1,fd=3))')
 
 
-def test_restarted_service_is_not_reported_as_a_new_port(shell, tools, no_state):
+def test_restarted_service_is_not_reported_as_a_new_port(cfg, shell, tools, no_state):
     tools.add("ss")
-    no_state["ports"] = ['0.0.0.0:22 users:(("sshd",pid=101,fd=3))']
-    shell.expect("ss -tlnp", '0.0.0.0:22 users:(("sshd",pid=999,fd=3))')
-    section = check_ports()
+    no_state["ports"] = ['tcp 0.0.0.0:22 users:(("sshd"))']
+    shell.expect("ss -tlnp", 'tcp 0.0.0.0:22 users:(("sshd",pid=999,fd=3))')
+    section = check_ports(cfg)
     assert alert_messages(section) == []
     assert _status_of(section, "Port Changes") == OK
 
 
-def test_a_genuinely_new_port_still_alerts(shell, tools, no_state):
+def test_a_genuinely_new_port_still_alerts(cfg, shell, tools, no_state):
     tools.add("ss")
-    no_state["ports"] = ['0.0.0.0:22 users:(("sshd",pid=101,fd=3))']
+    no_state["ports"] = ['tcp 0.0.0.0:22 users:(("sshd"))']
     shell.expect("ss -tlnp", "\n".join([
-        '0.0.0.0:22 users:(("sshd",pid=101,fd=3))',
-        '0.0.0.0:4444 users:(("nc",pid=555,fd=3))',
+        'tcp 0.0.0.0:22 users:(("sshd",pid=101,fd=3))',
+        'tcp 0.0.0.0:4444 users:(("nc",pid=555,fd=3))',
     ]))
-    assert len(alert_messages(check_ports())) == 1
+    assert len(alert_messages(check_ports(cfg))) == 1
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -261,7 +262,7 @@ def test_files_rewritten_at_boot_are_informational(cfg, shell, monkeypatch):
     shell.expect("find /etc", "/etc/hostname\n/etc/hosts\n/etc/timezone")
     shell.expect("stat -c '%y'", "2026-08-25 12:31:53.000")
     shell.expect("stat -c '%Y'", "1700000010")     # 10s after boot
-    section = check_etc_changes()
+    section = check_etc_changes(cfg)
     assert alert_messages(section) == []
     assert _status_of(section, "/etc/hostname") == INFO
 
@@ -272,7 +273,7 @@ def test_security_relevant_etc_change_alerts(cfg, shell, monkeypatch):
     shell.expect("find /etc", "/etc/shadow")
     shell.expect("stat -c '%y'", "2026-08-25 14:00:00.000")
     shell.expect("stat -c '%Y'", "1700086400")     # a day after boot
-    section = check_etc_changes()
+    section = check_etc_changes(cfg)
     assert len(alert_messages(section)) == 1
     assert "/etc/shadow" in alert_messages(section)[0]
     assert _status_of(section, "/etc/shadow") == CAUTION
@@ -286,7 +287,7 @@ def test_many_sensitive_changes_produce_one_grouped_alert(cfg, shell, monkeypatc
         ["/etc/passwd", "/etc/shadow", "/etc/group", "/etc/sudoers", "/etc/fstab"]))
     shell.expect("stat -c '%y'", "2026-08-25 14:00:00.000")
     shell.expect("stat -c '%Y'", "1700086400")
-    messages = alert_messages(check_etc_changes())
+    messages = alert_messages(check_etc_changes(cfg))
     assert len(messages) == 1
     assert "+2 more" in messages[0]
 
@@ -297,7 +298,7 @@ def test_ordinary_etc_churn_is_informational(cfg, shell, monkeypatch):
     shell.expect("find /etc", "/etc/apt/apt.conf.d/01autoremove")
     shell.expect("stat -c '%y'", "2026-08-25 14:00:00.000")
     shell.expect("stat -c '%Y'", "1700086400")
-    section = check_etc_changes()
+    section = check_etc_changes(cfg)
     assert alert_messages(section) == []
     assert _status_of(section, "Security-Relevant Changes") == OK
 
@@ -577,16 +578,154 @@ def test_no_reboot_means_no_alert(shell, no_state):
     assert alert_messages(section) == []
 
 
-def test_port_inventory_is_capped(shell, tools, no_state):
+def test_port_inventory_is_capped(cfg, shell, tools, no_state):
     tools.add("ss")
-    no_state["ports"] = []
-    shell.expect("ss -tlnp", "\n".join(f"0.0.0.0:{p} users:((\"svc\",pid=1,fd=3))"
+    no_state["ports"] = ["tcp 0.0.0.0:1 users:((\"x\"))"]
+    shell.expect("ss -tlnp", "\n".join(f"tcp 0.0.0.0:{p} users:((\"svc\",pid=1,fd=3))"
                                        for p in range(1000, 1040)))
-    section = check_ports()
-    assert any(r.label == "…" and "more listening socket" in r.value for r in section.rows)
+    section = check_ports(cfg)
+    assert any(r.label == "…" and "more socket" in r.value for r in section.rows)
 
 
 def test_uninstalled_optional_tools_do_not_get_their_own_section(cfg, shell, tools):
     """Docker/fail2ban absent used to cost a whole panel each."""
     assert check_docker(cfg).applicable is False
     assert check_fail2ban(cfg).applicable is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Listening sockets: TCP + UDP, and loopback is not reachable from anywhere
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("addr,loopback", [
+    ("127.0.0.1:6444",     True),
+    ("127.0.0.53%lo:53",   True),    # systemd-resolved, with a zone id
+    ("[::1]:323",          True),
+    ("10.255.255.254:53",  False),
+    ("0.0.0.0:22",         False),
+    ("[::]:22",            False),
+    ("*:8472",             False),   # a wildcard bind is the opposite of local
+])
+def test_loopback_classification(addr, loopback):
+    assert _is_loopback(addr) is loopback
+
+
+@pytest.mark.parametrize("addr,host,port", [
+    ("127.0.0.1:6444",   "127.0.0.1", "6444"),
+    ("[::1]:323",        "::1",       "323"),
+    ("[fe80::1%eth0]:80", "fe80::1%eth0", "80"),
+    ("*:8472",           "*",         "8472"),
+])
+def test_hostport_splitting(addr, host, port):
+    assert _split_hostport(addr) == (host, port)
+
+
+def test_udp_sockets_are_included(cfg, shell, tools, no_state):
+    tools.add("ss")
+    shell.expect("ss -tlnp", 'tcp 0.0.0.0:22 users:(("sshd",pid=1,fd=3))')
+    shell.expect("ss -ulnp", 'udp 0.0.0.0:161 users:(("snmpd",pid=2,fd=4))')
+    listed = " ".join(r.value for r in check_ports(cfg).rows)
+    assert "0.0.0.0:161" in listed, "UDP sockets were previously invisible"
+    assert "udp" in listed
+
+
+def test_loopback_sockets_are_hidden_by_default(cfg, shell, tools, no_state):
+    tools.add("ss")
+    shell.expect("ss -tlnp", "\n".join([
+        'tcp 0.0.0.0:22 users:(("sshd",pid=1,fd=3))',
+        'tcp 127.0.0.1:6444 users:(("k3s",pid=2,fd=4))',
+    ]))
+    shell.expect("ss -ulnp", 'udp 127.0.0.53%lo:53 users:(("resolved",pid=3,fd=5))')
+    section = check_ports(cfg)
+    listed = " ".join(r.value for r in section.rows if r.label == "")
+    assert "0.0.0.0:22" in listed
+    assert "6444" not in listed
+    assert "127.0.0.53" not in listed
+    assert any("2 hidden" in r.value for r in section.rows)
+
+
+def test_list_local_ports_flag_shows_them(cfg, shell, tools, no_state):
+    cfg.set("checks", "list_local_ports", "true")
+    tools.add("ss")
+    shell.expect("ss -tlnp", "\n".join([
+        'tcp 0.0.0.0:22 users:(("sshd",pid=1,fd=3))',
+        'tcp 127.0.0.1:6444 users:(("k3s",pid=2,fd=4))',
+    ]))
+    listed = " ".join(r.value for r in check_ports(cfg).rows if r.label == "")
+    assert "0.0.0.0:22" in listed and "6444" in listed
+
+
+def test_churning_loopback_ports_do_not_raise_alerts(cfg, shell, tools, no_state):
+    """Applications open random high ports on 127.0.0.1 constantly."""
+    tools.add("ss")
+    no_state["ports"] = ['tcp 0.0.0.0:22 users:(("sshd"))']
+    shell.expect("ss -tlnp", "\n".join([
+        'tcp 0.0.0.0:22 users:(("sshd",pid=1,fd=3))',
+        'tcp 127.0.0.1:46051 users:(("MainThread",pid=1481,fd=22))',
+        'tcp 127.0.0.1:39775 users:(("MainThread",pid=1482,fd=23))',
+    ]))
+    assert alert_messages(check_ports(cfg)) == []
+
+
+def test_a_new_exposed_port_still_alerts_with_its_protocol(cfg, shell, tools, no_state):
+    tools.add("ss")
+    no_state["ports"] = ['tcp 0.0.0.0:22 users:(("sshd"))']
+    shell.expect("ss -tlnp", 'tcp 0.0.0.0:22 users:(("sshd",pid=1,fd=3))')
+    shell.expect("ss -ulnp", 'udp 0.0.0.0:4444 users:(("nc",pid=9,fd=3))')
+    messages = alert_messages(check_ports(cfg))
+    assert len(messages) == 1
+    assert "udp" in messages[0] and "4444" in messages[0]
+
+
+def test_old_state_without_a_protocol_prefix_rebaselines_quietly(cfg, shell, tools, no_state):
+    """Upgrading must not report every socket on the host as brand new."""
+    tools.add("ss")
+    no_state["ports"] = ['0.0.0.0:22 users:(("sshd",pid=101,fd=3))']   # pre-UDP format
+    shell.expect("ss -tlnp", "\n".join([
+        'tcp 0.0.0.0:22 users:(("sshd",pid=1,fd=3))',
+        'tcp 0.0.0.0:443 users:(("nginx",pid=2,fd=4))',
+    ]))
+    section = check_ports(cfg)
+    assert alert_messages(section) == []
+    assert any("re-recorded" in r.value for r in section.rows)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# /etc: backup agents write timestamped files on a schedule
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_commvault_registry_backups_are_ignored_by_default(cfg):
+    """Observed on a real server: a new .zst every 90 minutes."""
+    args = _etc_ignore_args(cfg)
+    assert "/etc/CommVaultRegistryBackups/*" in args
+
+
+def test_extra_ignore_patterns_come_from_the_config(cfg):
+    cfg.set("checks", "etc_ignore", "/etc/foo/*, /etc/bar/*.bak")
+    args = _etc_ignore_args(cfg)
+    assert "-not -path '/etc/foo/*'" in args
+    assert "-not -path '/etc/bar/*.bak'" in args
+
+
+def test_ignore_patterns_are_shell_quoted(cfg):
+    """healthcheck.conf is admin-owned, but a pattern must stay one argument.
+
+    Re-parse the way the shell will: a space or a semicolon inside a pattern
+    must not split it into extra words.
+    """
+    import shlex
+    cfg.set("checks", "etc_ignore", "/etc/x y/*; rm -rf /")
+    tokens = shlex.split(_etc_ignore_args(cfg))
+    assert "/etc/x y/*; rm -rf /" in tokens, tokens
+    assert "rm" not in tokens and ";" not in tokens
+    assert tokens.count("-not") == 9
+
+
+def test_the_ignore_list_reaches_the_find_command(cfg, shell, monkeypatch):
+    import hc.checks
+    monkeypatch.setattr(hc.checks, "_boot_time", lambda: 0.0)
+    cfg.set("checks", "etc_ignore", "/etc/CommVaultRegistryBackups/*")
+    shell.expect("find /etc", "")
+    check_etc_changes(cfg)
+    find_cmd = [c for c in shell.calls if "find /etc" in c][0]
+    assert "CommVaultRegistryBackups" in find_cmd

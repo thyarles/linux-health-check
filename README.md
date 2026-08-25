@@ -189,16 +189,34 @@ and became unreadable. Half a dark theme is worse than none.
 - **Successful SSH logins** — count for today
 - **sudo usage** — commands executed today
 - **fail2ban** — banned IPs per jail, reported as INFO because a ban is fail2ban *working*; set `banned_ips_caution` to flag an unusual spike
-- **Listening ports** — full list; **change detection** on new or removed ports, comparing address + process name only, so a service restart (new PID) is not mistaken for a new port
+- **Listening sockets** — **TCP and UDP**, with **change detection** comparing protocol + address + process name only, so a service restart (new PID) is not mistaken for a new port. Sockets bound to loopback (`127.x`, `::1`, including a `%lo` zone id) are hidden by default: nothing off the host can reach them, and applications churn through random high ports on `127.0.0.1` all day. A wildcard bind (`*`, `0.0.0.0`, `::`) is treated as reachable, not local. Set `list_local_ports = true` to list them too
 - **Crontab changes** — scans `/etc/crontab`, `/etc/cron.d`, `/var/spool/cron`; alerts on new/removed entries
 - **SUID files** — full scan via `find`; alerts on new SUID files since last run
 - **Package changes** — installed/removed packages since last run, as an audit trail (INFO — routine on any host with unattended-upgrades)
-- **/etc modifications** — files changed in the last 24 hours. Only *security-relevant* paths (`passwd`, `shadow`, `sudoers`, `ssh`, `pam.d`, `fstab`, …) raise CAUTION, and as one grouped alert rather than one per file. Files rewritten within a minute of boot are recognised as boot artefacts.
+- **/etc modifications** — files changed in the last 24 hours. Only *security-relevant* paths (`passwd`, `shadow`, `sudoers`, `ssh`, `pam.d`, `fstab`, …) raise CAUTION, and as one grouped alert rather than one per file. Files rewritten within a minute of boot are recognised as boot artefacts. Backup agents that write timestamped files into `/etc` are skipped via `etc_ignore` — CommVault drops a new `.zst` into its registry backup directory every 90 minutes, and each one looked like a fresh configuration change.
 - **Log patterns** — OOM kills, disk I/O errors, kernel panics, segfaults, CPU machine checks, filesystem errors, SSH brute force markers — **scoped to today**, each with its own escalation count (one segfault is not an incident; one kernel panic is)
 - **Rootkit indicators** — `rkhunter` output (if installed), known suspicious file paths, and hidden-process detection that brackets `ps` with two `/proc` reads so that processes merely starting or exiting are not reported as hidden
 
 ### Tooling Status
 - Every report includes a **System Tools Status** section listing which monitoring tools are installed or missing, with the exact install command for the detected package manager. Reported as INFO: a tool that was missing yesterday is missing today for the same reason, so it could only ever be permanent noise. Act on it with `healthcheck.py bootstrap`.
+
+---
+
+## Check Options
+
+```ini
+[checks]
+# List loopback-bound sockets too. Off by default: nothing off the host can
+# reach 127.x / ::1, and applications churn through random high ports there.
+list_local_ports = false
+
+# Extra path patterns to skip in the /etc scan (comma-separated shell globs).
+# For backup agents that write timestamped files into /etc.
+etc_ignore = /etc/CommVaultRegistryBackups/*
+```
+
+Patterns are shell-quoted before reaching `find`, so a space or a semicolon in
+one stays part of the pattern instead of becoming a separate command.
 
 ---
 

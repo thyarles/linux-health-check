@@ -72,6 +72,21 @@ remind_unhealthy_hours = 24
 forget_after_hours = 72
 
 
+[checks]
+# Listening-port inventory.
+# Loopback sockets (127.x, ::1) cannot be reached from off the host, and
+# applications churn through random high ports on 127.0.0.1 all day, which is
+# pure noise in a daily report. By default only sockets reachable from the
+# network are listed and diffed. Set true to list the loopback ones too.
+list_local_ports = false
+
+# Extra path patterns to skip in the /etc modification scan (comma separated
+# shell globs). Backup agents that write timestamped files into /etc belong
+# here — CommVault drops a new .zst into its registry backup directory every
+# 90 minutes, and each one looked like a fresh configuration change.
+etc_ignore = /etc/CommVaultRegistryBackups/*
+
+
 [thresholds]
 # CPU usage per core — percentage that triggers each level
 cpu_caution   = 80
