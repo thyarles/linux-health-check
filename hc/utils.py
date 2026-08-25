@@ -70,6 +70,17 @@ def install_cmd(tool: str, rhel_pkg: str, deb_pkg: str) -> str:
     return f"yum install -y {rhel_pkg}  OR  apt-get install -y {deb_pkg}"
 
 
+# When true, save_state() is a no-op. Set by the read-only modes (report/text)
+# so that previewing a report does not consume the diff baselines that the
+# scheduled run depends on.
+_STATE_FROZEN = False
+
+
+def freeze_state(frozen: bool = True) -> None:
+    global _STATE_FROZEN
+    _STATE_FROZEN = frozen
+
+
 def load_state(name: str):
     try:
         return json.loads((STATE_DIR / f"{name}.json").read_text())
@@ -78,6 +89,8 @@ def load_state(name: str):
 
 
 def save_state(name: str, data) -> None:
+    if _STATE_FROZEN:
+        return
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     (STATE_DIR / f"{name}.json").write_text(json.dumps(data, indent=2))
 
@@ -108,11 +121,38 @@ def count_in_log(log_file: str, grep_pattern: str) -> int:
         return 0
 
 
+def count_in_log_today(sources: str, grep_pattern: str) -> tuple:
+    """Count matches for `grep_pattern` limited to TODAY, plus up to 3 samples.
+
+    Greping the whole log file makes every check sticky: one segfault last
+    month keeps the report yellow until the log rotates. Everything here is
+    scoped to the current day so a cleared condition clears the report.
+    """
+    if has("journalctl"):
+        _, out, _ = run(
+            f"journalctl --since=today --no-pager -q 2>/dev/null | grep -iE '{grep_pattern}' | tail -200",
+            timeout=60,
+        )
+        found = [l for l in out.splitlines() if l.strip()]
+        return len(found), found[-3:]
+
+    date_re = today_date_re()
+    lines: "list" = []
+    for src in sources.split():
+        if not pathlib.Path(src).exists():
+            continue
+        _, out, _ = run(
+            f"grep -E '{date_re}' {src} 2>/dev/null | grep -iE '{grep_pattern}' | tail -200"
+        )
+        lines.extend(l for l in out.splitlines() if l.strip())
+    return len(lines), lines[-3:]
+
+
 def load_config() -> configparser.ConfigParser:
     cfg = configparser.ConfigParser()
     cfg.read_dict({
         "smtp": {
-            "host":     "relay.mpt.mp.br",
+            "host":     "relay.domain.com",
             "port":     "25",
             "use_tls":  "false",
             "username": "",
@@ -120,8 +160,26 @@ def load_config() -> configparser.ConfigParser:
             "from":     f"healthcheck@{socket.getfqdn()}",
         },
         "email": {
+            # Small "the system is alive" group — always gets a message.
             "daily_recipients": "",
+            # Broad list — only hears about NEW problems worth acting on.
             "alert_recipients": "",
+            # How the HTML report reaches the reader:
+            #   inline     — rendered in the message body (recommended)
+            #   attachment — plain text in the body, HTML as a file
+            #   both       — inline and attached
+            "html_mode": "inline",
+        },
+        "alerts": {
+            # Minimum severity that notifies alert_recipients: caution | unhealthy
+            "notify_all_on":          "caution",
+            # Re-notify about a condition that is still open after N hours.
+            # 0 disables the reminder entirely (notify once, on first sight).
+            "remind_caution_hours":   "168",   # 7 days
+            "remind_unhealthy_hours": "24",
+            # Forget a condition that has been clear for this long, so that a
+            # genuine recurrence notifies again instead of being deduplicated.
+            "forget_after_hours":     "72",
         },
         "thresholds": {
             "cpu_caution":         "80",
@@ -132,6 +190,21 @@ def load_config() -> configparser.ConfigParser:
             "ram_unhealthy":       "95",
             "load_caution_mult":   "1.0",
             "load_unhealthy_mult": "2.0",
+            # Zombies are normal in small numbers; only a growing pile matters.
+            "zombie_caution":      "10",
+            "zombie_unhealthy":    "50",
+            # Failed SSH attempts today. Any internet-facing host sees a
+            # constant background level, so these are deliberately high.
+            "failed_ssh_caution":   "50",
+            "failed_ssh_unhealthy": "500",
+            # Pending updates: count that raises CAUTION (0 = report as INFO only)
+            "updates_caution":          "0",
+            "security_updates_caution": "0",
+            # fail2ban bans are the system WORKING. Only flag an unusual spike.
+            "banned_ips_caution":  "0",
+            # Docker: exited-non-zero containers within this window are fresh
+            # failures; anything older is treated as intentionally stopped.
+            "docker_recent_hours": "24",
         },
         "crontab": {
             "time": "07:00",

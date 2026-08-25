@@ -1,0 +1,68 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Dev tooling ONLY.
+#
+# Nothing here is required to run the health check. The server deployment is
+# `healthcheck.py` + `hc/` executed by the system python3 with zero third-party
+# packages — see [project] dependencies below (deliberately empty) and
+# tests/test_stdlib_only.py, which fails the build if a runtime module ever
+# imports something outside the standard library.
+#
+#   uv sync            install the dev toolchain into .venv
+#   uv run pytest      tests
+#   uv run mypy .      type check
+#   uv run ruff check  lint
+# ─────────────────────────────────────────────────────────────────────────────
+
+[project]
+name = "linux-health-check"
+version = "2.0.0"
+description = "Linux server health and security monitoring — stdlib only at runtime"
+# 3.8 is the floor the DEV toolchain (pytest/mypy/ruff) supports. The runtime
+# code is deliberately kept compatible further back for RHEL 7 (python 3.6):
+# no walrus, no dataclasses, no positional-only params, no match statements.
+requires-python = ">=3.8"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "mypy>=1.11",
+    "ruff>=0.6",
+]
+
+[tool.uv]
+# There is nothing to build or install — the "package" is two paths copied to
+# the server. Keep uv from trying to wheel it up.
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+
+[tool.mypy]
+# No python_version pin: mypy 2.x only type-checks against 3.10+. The older-python
+# syntax floor for the runtime code is enforced by ruff's target-version below.
+files = ["healthcheck.py", "hc", "tests"]
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+no_implicit_optional = true
+check_untyped_defs = true
+disallow_untyped_defs = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+
+[tool.ruff.lint]
+# Deliberately NOT enabling "UP" (pyupgrade): it would rewrite the runtime code
+# to syntax the RHEL 7 pythons on the target servers cannot parse.
+select = ["E", "F", "W", "B", "C4"]
+ignore = [
+    "E501",  # long lines: the report/HTML builders are more readable wide
+    "E241",  # multiple spaces after comma — the config tables are column-aligned
+    "E221",  # multiple spaces before operator — same reason
+    "E701",  # `if x: do()` on one line — used deliberately for aligned guard rows
+    "E741",  # `for l in lines` — the established idiom throughout this codebase
+]
