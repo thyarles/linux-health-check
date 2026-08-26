@@ -137,3 +137,9 @@ docker_recent_hours = 24
 # Default run time used when you call: python3 healthcheck.py crontab
 # You can override it by passing the time as argument: crontab 06:30
 time = 07:00
+
+# Interpreter the cron entry runs under. Leave blank to use whichever python
+# ran `healthcheck.py crontab` (correct for miniconda / /opt standalone builds
+# on hosts where /usr/bin/python3 is missing or too old).
+# Env var HEALTHCHECK_PYTHON overrides this.
+python =
