@@ -53,10 +53,10 @@ private Miniconda under `/root`, so the system Python that `yum` depends on is
 never touched.
 
 ```bash
-# latest tag
+# the current release
 curl -fsSL https://raw.githubusercontent.com/thyarles/linux-health-check/main/install.sh | bash
 
-# a specific tag
+# any other tag
 curl -fsSL https://raw.githubusercontent.com/thyarles/linux-health-check/main/install.sh | bash -s -- v2.0.1
 ```
 
@@ -65,9 +65,14 @@ tarball to `/root/linux-health-check`, writes `healthcheck.conf` from the
 example, installs the cron entry, and then **verifies that the entry it just
 wrote actually points at the private interpreter** before reporting success.
 
-With no tag argument it resolves the newest version tag from the GitHub API —
-compared numerically, so `v2.0.10` correctly outranks `v2.0.9`. A published
-GitHub Release wins over raw tags when one exists.
+With no tag argument it installs the release pinned as `DEFAULT_TAG` at the top
+of `install.sh`. Because `install.sh` is always fetched from `main`, that one
+line is what "current" means — **bump it on `main` whenever you cut a tag.**
+
+It is pinned rather than resolved from the GitHub API on purpose: the
+unauthenticated API allows 60 calls per hour *per IP*, so one shared office NAT
+exhausts the quota and every install behind it fails with `HTTP 403: rate limit
+exceeded`. A pinned tag has no such failure mode.
 
 **Re-running it upgrades in place.** `healthcheck.conf`, `state/` and `reports/`
 are never in the release archive, so they survive untouched — your SMTP
@@ -77,17 +82,16 @@ installed tag is recorded in `.installed-version`.
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
-| `REPO_TAG` | newest tag | Version to install (or pass as the first argument) |
+| `REPO_TAG` | `DEFAULT_TAG` in `install.sh` | Version to install (or pass as the first argument) |
 | `APP_DIR` | `/root/linux-health-check` | Where the code lands |
 | `CONDA_PREFIX_DIR` | `/root/miniconda3` | Where the private Python lands |
 | `MAIL_DOMAIN` | `mpt.mp.br` | Replaces `domain.com` in the generated config |
 | `CRON_TIME` | `07:00` | Daily run time |
 | `REPO_SLUG` | `thyarles/linux-health-check` | Source repo |
 
-Needs `curl` or `wget` (to fetch Miniconda) and `tar`. Everything after the
-Miniconda step goes through Miniconda's own Python, whose TLS is far newer than
-RHEL 7's. Tags before `v2.0.1` hardcode `/usr/bin/python3` and will be rejected
-by the verification step.
+Needs `curl` or `wget` and `tar` — no `git`, and no GitHub API. Tags before
+`v2.0.1` hardcode `/usr/bin/python3` and will be rejected by the verification
+step.
 
 ---
 
