@@ -6,7 +6,7 @@ import shutil
 import socket
 import subprocess
 
-VERSION     = "2.0"
+VERSION     = "2.0.2"
 SCRIPT_PATH = pathlib.Path(__file__).resolve().parent.parent / "healthcheck.py"
 SCRIPT_DIR  = SCRIPT_PATH.parent
 STATE_DIR   = SCRIPT_DIR / "state"

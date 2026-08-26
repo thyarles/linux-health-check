@@ -9,6 +9,10 @@ A condition that has already been reported does not notify the broad list again 
 
 Requires only **Python 3** (stdlib — no pip). Supports **RHEL 7+** (yum), **RHEL 8+** (dnf), and **Debian/Ubuntu** (apt-get).
 
+On old hosts with no usable `python3` at all — RHEL 7.3 ships Python 2.7.5 and
+nothing else — [`install.sh`](install.sh) sets up a private interpreter and the
+whole thing in one command. See [Quick Install](#quick-install).
+
 ---
 
 ## Files
@@ -18,6 +22,7 @@ Requires only **Python 3** (stdlib — no pip). Supports **RHEL 7+** (yum), **RH
 | `healthcheck.py` | Entry point | yes |
 | `hc/` | The check, report, alert and mail modules | yes |
 | `healthcheck.conf.example` | Config template — copy to `healthcheck.conf` and edit | yes |
+| `install.sh` | One-command installer: private Python + tagged release + cron | run on server |
 | `pyproject.toml`, `tests/`, `uv.lock`, `Makefile` | Dev toolchain only | **no** |
 
 When deployed, the script creates two subdirectories next to itself:
@@ -27,6 +32,7 @@ When deployed, the script creates two subdirectories next to itself:
 ├── healthcheck.py
 ├── hc/                       ← the package healthcheck.py imports
 ├── healthcheck.conf          ← per-server config (not versioned)
+├── .installed-version        ← tag installed by install.sh
 ├── reports/                  ← saved HTML reports (one per run)
 └── state/                    ← JSON snapshots for change detection
     ├── packages.json
@@ -39,7 +45,56 @@ When deployed, the script creates two subdirectories next to itself:
 
 ---
 
+## Quick Install
+
+For a server that has no usable `python3`, or any server where you just want the
+current release running. Needs no `git` and no repositories — it installs a
+private Miniconda under `/root`, so the system Python that `yum` depends on is
+never touched.
+
+```bash
+# latest tag
+curl -fsSL https://raw.githubusercontent.com/thyarles/linux-health-check/main/install.sh | bash
+
+# a specific tag
+curl -fsSL https://raw.githubusercontent.com/thyarles/linux-health-check/main/install.sh | bash -s -- v2.0.1
+```
+
+It installs Miniconda to `/root/miniconda3`, downloads the tagged release
+tarball to `/root/linux-health-check`, writes `healthcheck.conf` from the
+example, installs the cron entry, and then **verifies that the entry it just
+wrote actually points at the private interpreter** before reporting success.
+
+With no tag argument it resolves the newest version tag from the GitHub API —
+compared numerically, so `v2.0.10` correctly outranks `v2.0.9`. A published
+GitHub Release wins over raw tags when one exists.
+
+**Re-running it upgrades in place.** `healthcheck.conf`, `state/` and `reports/`
+are never in the release archive, so they survive untouched — your SMTP
+credentials and the change-detection baselines are safe. `hc/` is purged before
+the new copy so a module deleted upstream cannot linger and get imported. The
+installed tag is recorded in `.installed-version`.
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `REPO_TAG` | newest tag | Version to install (or pass as the first argument) |
+| `APP_DIR` | `/root/linux-health-check` | Where the code lands |
+| `CONDA_PREFIX_DIR` | `/root/miniconda3` | Where the private Python lands |
+| `MAIL_DOMAIN` | `mpt.mp.br` | Replaces `domain.com` in the generated config |
+| `CRON_TIME` | `07:00` | Daily run time |
+| `REPO_SLUG` | `thyarles/linux-health-check` | Source repo |
+
+Needs `curl` or `wget` (to fetch Miniconda) and `tar`. Everything after the
+Miniconda step goes through Miniconda's own Python, whose TLS is far newer than
+RHEL 7's. Tags before `v2.0.1` hardcode `/usr/bin/python3` and will be rejected
+by the verification step.
+
+---
+
 ## Deploy to a Server
+
+If you prefer a custom layout, or the server already has a working `python3`,
+the manual route still applies.
 
 ```bash
 # 1. Copy the runtime files to the server (healthcheck.py needs the hc/ package).
@@ -82,6 +137,21 @@ python3 healthcheck.py crontab [HH:MM]  Install/update crontab entry
 `report` and `text` are read-only: they never send email and never touch the
 state snapshots, so previewing a report cannot consume the change-detection
 baselines the scheduled run depends on.
+
+### Which Python the cron entry runs
+
+`crontab` writes the interpreter path into the cron line. It resolves, in order:
+
+1. `HEALTHCHECK_PYTHON` in the environment
+2. `python` under `[crontab]` in `healthcheck.conf`
+3. **`sys.executable`** — whichever Python you invoked `healthcheck.py` with
+4. `python3` on `PATH`
+
+Rule 3 is the one that matters: `/root/miniconda3/bin/python healthcheck.py
+crontab` installs a line that runs under *that* interpreter, with no
+configuration. Cron runs with a minimal environment and often no useful `PATH`,
+so a hardcoded `python3` is exactly the kind of entry that fails silently every
+night on a host where `/usr/bin/python3` does not exist.
 
 ---
 
@@ -264,7 +334,8 @@ State snapshots (ports, packages, SUID files, crontabs) are created on the first
 
 ## Development
 
-The server runs this with a bare system `python3` and **no third-party packages**.
+The server runs this with a bare `python3` — the system one, or the private
+Miniconda that `install.sh` provisions — and **no third-party packages**.
 The dev toolchain is therefore kept strictly separate: it lives in
 `pyproject.toml` under `[dependency-groups]`, never in `dependencies`, and is
 never copied to a server.
@@ -274,7 +345,7 @@ There is a `Makefile` for the common tasks — run `make` on its own to list the
 ```bash
 make install       # uv sync: install pytest / mypy / ruff into .venv
 make check         # tests + lint + types — the one to remember
-make test          # 157 tests, ~1s, no root and no network needed
+make test          # 252 tests, ~1s, no root and no network needed
 make deploy-check  # prove the shipping file set runs on a bare system python3
 make text          # preview the report in the terminal, sends no email
 ```
@@ -309,7 +380,9 @@ dataclasses, no `match`.
 
 ## Requirements
 
-- Python 3.6+ (stdlib only — no `pip install` required)
+- Python 3.6+ (stdlib only — no `pip install` required). No system `python3`?
+  [`install.sh`](install.sh) provisions a private one; see [Quick Install](#quick-install).
+- For `install.sh` only: `curl` or `wget`, and `tar`. No `git` needed.
 - `sysstat` package for `mpstat` (per-core CPU stats; falls back gracefully if absent)
 - A working MTA on localhost
 - Root or sudo for `bootstrap` auto-install and reading protected log files
