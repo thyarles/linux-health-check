@@ -10,7 +10,7 @@ import socket
 from .models import OK, INFO, CAUTION, UNHEALTHY, Section
 from .utils  import run, has, _fmt_bytes, read_os_release, pkg_manager, install_cmd
 from .utils  import load_state, save_state, today_date_re, count_in_log
-from .utils  import count_in_log_today
+from .utils  import count_in_log_today, host_label
 
 
 # How many rows a purely-informational inventory is allowed to print.
@@ -38,7 +38,14 @@ def check_system_info() -> Section:
     s = Section("System Information")
     osi = read_os_release()
     s.add("Date",          datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
-    s.add("Hostname",      socket.getfqdn())
+    s.add("Hostname",      host_label())
+    # When the resolved name disagrees with the kernel's, say so once. That
+    # mismatch is how three RKE2 nodes all came to call themselves
+    # xlp-mgmt.domain.com, and it is invisible until someone prints both.
+    _resolved = socket.getfqdn()
+    if _resolved.split(".")[0].lower() != socket.gethostname().split(".")[0].lower():
+        s.add("Resolved name", f"{_resolved}  (shared/VIP name — not used as this host's identity)",
+              INFO)
     s.add("OS",            osi.get("PRETTY_NAME", "unknown"))
     _, k, _  = run("uname -r")
     s.add("Kernel",        k or "unknown")

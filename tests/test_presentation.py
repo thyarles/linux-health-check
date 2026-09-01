@@ -70,7 +70,7 @@ def long_hostname(monkeypatch):
     called 'pgtdt65297' and failed on a CI runner, which is the least useful
     way to find out."""
     import hc.report
-    monkeypatch.setattr(hc.report.socket, "getfqdn", lambda: LONG_HOST)
+    monkeypatch.setattr(hc.report, "host_label", lambda: LONG_HOST)
 
 
 @pytest.mark.parametrize("renderer", [generate_text, generate_plain])
@@ -95,7 +95,7 @@ def short_hostname(monkeypatch):
     """Same reasoning as long_hostname: pin it. A test about hostname length
     must not read the length of whatever machine it runs on."""
     import hc.report
-    monkeypatch.setattr(hc.report.socket, "getfqdn", lambda: "web01.example.com")
+    monkeypatch.setattr(hc.report, "host_label", lambda: "web01.example.com")
 
 
 @pytest.mark.parametrize("renderer", [generate_text, generate_plain])

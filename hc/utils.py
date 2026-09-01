@@ -33,6 +33,59 @@ def has(cmd: str) -> bool:
     return shutil.which(cmd) is not None
 
 
+# Set from [general] hostname by load_config(), which always runs before
+# anything renders. A module global rather than a parameter because the report
+# renderers are called from several places and none of them carry the config.
+_HOST_OVERRIDE = ""
+
+
+def host_label() -> str:
+    """The name this report is about.
+
+    NOT socket.getfqdn(). That function takes the kernel's hostname, resolves it
+    through /etc/hosts and DNS, and returns the FIRST name it finds there — which
+    on a clustered host is routinely a shared VIP rather than the machine. Three
+    RKE2 nodes sitting behind xlp-mgmt.domain.com each reported themselves as
+    `xlp-mgmt.domain.com`, so their reports, their subject lines and their
+    saved report files were indistinguishable and their alerts looked like one
+    host flapping.
+
+    Worse, getfqdn() is not even stable: it reverse-resolves, so on a node that
+    sometimes holds a floating VIP the answer changes with the VIP. A host's
+    identity must not drift.
+
+    So the kernel's own hostname wins, and it is usually already qualified
+    (`hostname` printing hst-exp03.domain.com). getfqdn() is consulted for one
+    narrow purpose — supplying a domain the kernel name lacks — and only when
+    it is talking about the same machine. That also avoids adopting getfqdn()'s
+    casing, which resolvers are free to mangle: it answers hst-exp03.domain.com
+    on a host whose own name is lowercase.
+    """
+    if _HOST_OVERRIDE:
+        return _HOST_OVERRIDE
+    name = socket.gethostname()
+    if "." in name:
+        return name
+    fqdn = socket.getfqdn()
+    if name and fqdn and fqdn.split(".")[0].lower() == name.lower():
+        return fqdn
+    return name or fqdn
+
+
+def host_mail_domain() -> str:
+    """Hostname for the default From: address.
+
+    host_label() is usually a bare short name, and a From: with no domain is
+    rejected by some relays — so borrow the domain from the resolved FQDN when
+    there is one. Distinct per host, which is the whole point.
+    """
+    label = host_label()
+    if "." in label:
+        return label
+    fqdn = socket.getfqdn()
+    return f"{label}.{fqdn.split('.', 1)[1]}" if "." in fqdn else label
+
+
 def _fmt_bytes(n: int) -> str:
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if abs(n) < 1024:
@@ -151,13 +204,19 @@ def count_in_log_today(sources: str, grep_pattern: str) -> tuple:
 def load_config() -> configparser.ConfigParser:
     cfg = configparser.ConfigParser()
     cfg.read_dict({
+        "general": {
+            # Overrides the name this host calls itself in reports, subject
+            # lines and saved report files. Blank uses the kernel hostname —
+            # see host_label() for why the resolved FQDN is not trusted.
+            "hostname": "",
+        },
         "smtp": {
             "host":     "relay.domain.com",
             "port":     "25",
             "use_tls":  "false",
             "username": "",
             "password": "",
-            "from":     f"healthcheck@{socket.getfqdn()}",
+            "from":     f"healthcheck@{host_mail_domain()}",
         },
         "email": {
             # Small "the system is alive" group — always gets a message.
@@ -259,4 +318,6 @@ def load_config() -> configparser.ConfigParser:
     })
     if CONFIG_PATH.exists():
         cfg.read(str(CONFIG_PATH))
+    global _HOST_OVERRIDE
+    _HOST_OVERRIDE = cfg.get("general", "hostname", fallback="").strip()
     return cfg

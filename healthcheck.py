@@ -17,11 +17,10 @@ Copy healthcheck.conf.example to healthcheck.conf and edit as needed.
 """
 
 import datetime
-import socket
 import sys
 
 from hc.models    import OK, _worse
-from hc.utils     import load_config, REPORT_DIR, freeze_state
+from hc.utils     import load_config, REPORT_DIR, freeze_state, host_label
 from hc.alerts    import evaluate
 from hc.checks    import (
     check_system_info, check_cpu, check_memory, check_disk,
@@ -145,7 +144,7 @@ def main() -> None:
         freeze_state(True)
 
     cfg      = load_config()
-    hostname = socket.getfqdn()
+    hostname = host_label()
 
     print(f"[{datetime.datetime.now():%Y-%m-%d %H:%M:%S}] Running health checks on {hostname}...", file=sys.stderr)
     sections, overall, alerts = run_all_checks(cfg)

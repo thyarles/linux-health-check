@@ -92,7 +92,7 @@ installed tag is recorded in `.installed-version`.
 | `REPO_TAG` | `DEFAULT_TAG` in `install.sh` | Version to install (or pass as the first argument) |
 | `APP_DIR` | `/root/linux-health-check` | Where the code lands |
 | `CONDA_PREFIX_DIR` | `/root/miniconda3` | Where the private Python lands |
-| `MAIL_DOMAIN` | `mpt.mp.br` | Replaces `domain.com` in the generated config |
+| `MAIL_DOMAIN` | `domain.com` | Replaces `domain.com` in the generated config |
 | `CRON_TIME` | `07:00` | Daily run time |
 | `REPO_SLUG` | `thyarles/linux-health-check` | Source repo |
 | `DOWNLOADER` | auto | Force `curl` or `wget` when the other is broken |
@@ -379,6 +379,47 @@ hours" count. The API server's `--event-ttl` defaults to **one hour** and both
 k3s and RKE2 ship that default, so a 24-hour window is unobtainable — and a row
 claiming one would make a cluster look quiet 90 minutes after an incident. The
 row labels the window from the oldest event actually returned instead.
+
+---
+
+## Host Identity
+
+```ini
+[general]
+hostname =        # blank = the kernel hostname (`hostname` on the command line)
+```
+
+The report header, the email subject and the saved report filenames all name the
+host. That name comes from the **kernel hostname**, not `socket.getfqdn()`.
+
+`getfqdn()` takes the kernel hostname, reverse-resolves it, and returns the
+*first* name it finds — which on a clustered host is routinely a shared VIP
+rather than the machine. Three RKE2 nodes behind `xlp-mgmt.example.com` each
+reported themselves as `xlp-mgmt.example.com`: identical headers, identical
+subject lines, colliding report filenames, and three machines' alerts arriving as
+though one host were flapping.
+
+It is also **not stable**. Asked again, the same node answered
+`example-03.domain.com` — upper-cased, on a host whose own name is lowercase. The
+answer depends on which node currently holds the VIP, on DNS, and on cache state.
+An identity that drifts with any of those is worse than a wrong one, because the
+same machine files reports under different names on different days.
+
+So the kernel hostname wins, and it is usually already qualified. `getfqdn()` is
+consulted for one narrow purpose — supplying a domain the kernel name *lacks* —
+and only when it is talking about the same machine, so `web01` +
+`web01.example.com` still renders fully qualified. When the resolved name
+disagrees, the report says so explicitly in System Information:
+
+```
+Hostname        example-03
+Resolved name   xlp-mgmt.domain.com  (shared/VIP name — not used as this host's identity)
+```
+
+Set `hostname` only if you want something other than the kernel name. The
+default `From:` address follows the same identity, borrowing the domain from the
+resolved name when the kernel one is bare — so `example-03` on
+`xlp-mgmt.domain.com` sends as `healthcheck@example-03.domain.com`.
 
 ---
 

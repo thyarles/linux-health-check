@@ -1,9 +1,10 @@
 import configparser
 import smtplib
-import socket
 import sys
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+from .utils import host_mail_domain
 
 
 def send_email(cfg: configparser.ConfigParser, subject: str,
@@ -22,7 +23,7 @@ def send_email(cfg: configparser.ConfigParser, subject: str,
     use_tls  = cfg.getboolean("smtp", "use_tls", fallback=False)
     username = cfg.get("smtp", "username", fallback="").strip()
     password = cfg.get("smtp", "password", fallback="").strip()
-    from_    = cfg.get("smtp", "from",     fallback=f"healthcheck@{socket.getfqdn()}").strip()
+    from_    = cfg.get("smtp", "from",     fallback=f"healthcheck@{host_mail_domain()}").strip()
 
     # inline      — multipart/alternative: the client renders the HTML in the
     #               body and falls back to plain text if it cannot. This is what
