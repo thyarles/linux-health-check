@@ -394,8 +394,8 @@ host. That name comes from the **kernel hostname**, not `socket.getfqdn()`.
 
 `getfqdn()` takes the kernel hostname, reverse-resolves it, and returns the
 *first* name it finds — which on a clustered host is routinely a shared VIP
-rather than the machine. Three RKE2 nodes behind `rancher-mgmt.example.com` each
-reported themselves as `rancher-mgmt.example.com`: identical headers, identical
+rather than the machine. Three RKE2 nodes behind `xlp-mgmt.example.com` each
+reported themselves as `xlp-mgmt.example.com`: identical headers, identical
 subject lines, colliding report filenames, and three machines' alerts arriving as
 though one host were flapping.
 
@@ -413,13 +413,13 @@ disagrees, the report says so explicitly in System Information:
 
 ```
 Hostname        example-03
-Resolved name   rancher-mgmt.domain.com  (shared/VIP name — not used as this host's identity)
+Resolved name   xlp-mgmt.domain.com  (shared/VIP name — not used as this host's identity)
 ```
 
 Set `hostname` only if you want something other than the kernel name. The
 default `From:` address follows the same identity, borrowing the domain from the
 resolved name when the kernel one is bare — so `example-03` on
-`rancher-mgmt.domain.com` sends as `healthcheck@example-03.domain.com`.
+`xlp-mgmt.domain.com` sends as `healthcheck@example-03.domain.com`.
 
 ---
 

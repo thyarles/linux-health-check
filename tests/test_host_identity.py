@@ -1,14 +1,14 @@
 """Which name a host calls itself.
 
 Written from a real incident: three RKE2 nodes (mpt-kpm01/02/03) sit behind the
-shared name rancher-mgmt.mpt.mp.br. `socket.getfqdn()` reverse-resolves the
+shared name xlp-mgmt.domain.com. `socket.getfqdn()` reverse-resolves the
 kernel hostname and returns the *first* name it finds, which on those nodes came
-back as `rancher-mgmt.mpt.mp.br` — identical report headers, identical subject
+back as `xlp-mgmt.domain.com` — identical report headers, identical subject
 lines, colliding report filenames, and three machines' alerts reading as one
 host flapping.
 
-It is also not stable. Asked again on mpt-kpm03 it answered
-`MPT-KPM03.mpt.mp.br`, upper-cased, on a host whose own name is lowercase. A
+It is also not stable. Asked again on hst-exp03 it answered
+`hst-exp03.domain.com`, upper-cased, on a host whose own name is lowercase. A
 resolver's answer depends on which node currently holds the VIP, on DNS, and on
 cache state; an identity that drifts with any of those is worse than a wrong
 one, because the same machine reports under different names on different days.
@@ -36,14 +36,14 @@ def _names(monkeypatch, kernel, resolved):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_a_shared_vip_name_never_replaces_the_machine_name(monkeypatch):
-    _names(monkeypatch, "mpt-kpm03", "rancher-mgmt.mpt.mp.br")
-    assert host_label() == "mpt-kpm03"
+    _names(monkeypatch, "hst-exp03", "xlp-mgmt.domain.com")
+    assert host_label() == "hst-exp03"
 
 
-@pytest.mark.parametrize("kernel", ["mpt-kpm01", "mpt-kpm02", "mpt-kpm03"])
+@pytest.mark.parametrize("kernel", ["mpt-kpm01", "mpt-kpm02", "hst-exp03"])
 def test_each_node_behind_one_vip_reports_a_distinct_name(monkeypatch, kernel):
     """The point of the fix: three reports, three identities."""
-    _names(monkeypatch, kernel, "rancher-mgmt.mpt.mp.br")
+    _names(monkeypatch, kernel, "xlp-mgmt.domain.com")
     assert host_label() == kernel
 
 
@@ -64,25 +64,25 @@ def test_the_match_is_case_insensitive(monkeypatch):
 
 
 def test_an_already_qualified_kernel_name_is_used_verbatim(monkeypatch):
-    """Real output from mpt-kpm03: `hostname` is already fully qualified and
+    """Real output from hst-exp03: `hostname` is already fully qualified and
     getfqdn() answers with the same name UPPER-CASED. The kernel's spelling is
     the one the operator sees, so nothing is borrowed from the resolver."""
-    _names(monkeypatch, "mpt-kpm03.mpt.mp.br", "MPT-KPM03.mpt.mp.br")
-    assert host_label() == "mpt-kpm03.mpt.mp.br"
+    _names(monkeypatch, "hst-exp03.domain.com", "hst-exp03.domain.com")
+    assert host_label() == "hst-exp03.domain.com"
 
 
 def test_a_qualified_kernel_name_ignores_the_resolver_entirely(monkeypatch):
     """getfqdn() reverse-resolves, so on a node that sometimes holds a floating
     VIP its answer changes with the VIP. An identity that drifts is useless, so
     a qualified kernel name never consults it."""
-    _names(monkeypatch, "mpt-kpm03.mpt.mp.br", "rancher-mgmt.mpt.mp.br")
-    assert host_label() == "mpt-kpm03.mpt.mp.br"
+    _names(monkeypatch, "hst-exp03.domain.com", "xlp-mgmt.domain.com")
+    assert host_label() == "hst-exp03.domain.com"
 
 
 def test_the_same_host_reports_the_same_name_whoever_holds_the_vip(monkeypatch):
-    _names(monkeypatch, "mpt-kpm03.mpt.mp.br", "rancher-mgmt.mpt.mp.br")
+    _names(monkeypatch, "hst-exp03.domain.com", "xlp-mgmt.domain.com")
     holding_vip = host_label()
-    _names(monkeypatch, "mpt-kpm03.mpt.mp.br", "MPT-KPM03.mpt.mp.br")
+    _names(monkeypatch, "hst-exp03.domain.com", "hst-exp03.domain.com")
     assert host_label() == holding_vip
 
 
@@ -102,7 +102,7 @@ def test_an_empty_kernel_hostname_falls_back_to_the_resolved_one(monkeypatch):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_the_config_override_wins(monkeypatch):
-    _names(monkeypatch, "mpt-kpm03", "rancher-mgmt.mpt.mp.br")
+    _names(monkeypatch, "hst-exp03", "xlp-mgmt.domain.com")
     monkeypatch.setattr(u, "_HOST_OVERRIDE", "kpm03.prod.example.com")
     assert host_label() == "kpm03.prod.example.com"
 
@@ -132,8 +132,8 @@ def test_load_config_clears_a_stale_override(monkeypatch, tmp_path):
 def test_the_mail_host_borrows_a_domain_from_the_resolved_name(monkeypatch):
     """A From: with no domain is rejected by some relays, so a bare kernel
     name gets the resolved name's domain — still distinct per host."""
-    _names(monkeypatch, "mpt-kpm03", "rancher-mgmt.mpt.mp.br")
-    assert host_mail_domain() == "mpt-kpm03.mpt.mp.br"
+    _names(monkeypatch, "hst-exp03", "xlp-mgmt.domain.com")
+    assert host_mail_domain() == "hst-exp03.domain.com"
 
 
 def test_the_mail_host_leaves_an_already_qualified_name_alone(monkeypatch):
@@ -153,24 +153,24 @@ def test_the_mail_host_copes_with_no_domain_anywhere(monkeypatch):
 def test_the_report_header_uses_the_machine_name(monkeypatch):
     from hc.models import OK, Section
     from hc.report import generate_html, generate_text
-    monkeypatch.setattr("hc.report.host_label", lambda: "mpt-kpm03")
+    monkeypatch.setattr("hc.report.host_label", lambda: "hst-exp03")
     s = Section("Disk Usage")
     s.add("/", "40% used", OK)
     for out in (generate_text([s], OK), generate_html([s], OK)):
-        assert "mpt-kpm03" in out
-        assert "rancher-mgmt" not in out
+        assert "hst-exp03" in out
+        assert "xlp-mgmt" not in out
 
 
 def test_system_info_shows_the_resolved_name_when_it_disagrees(monkeypatch, shell):
     """The mismatch is invisible until something prints both, so the report
     says which shared name the host resolves to and that it is not its identity."""
     import hc.checks
-    monkeypatch.setattr(hc.checks, "host_label", lambda: "mpt-kpm03")
-    monkeypatch.setattr(hc.checks.socket, "getfqdn", lambda *a: "rancher-mgmt.mpt.mp.br")
-    monkeypatch.setattr(hc.checks.socket, "gethostname", lambda: "mpt-kpm03")
+    monkeypatch.setattr(hc.checks, "host_label", lambda: "hst-exp03")
+    monkeypatch.setattr(hc.checks.socket, "getfqdn", lambda *a: "xlp-mgmt.domain.com")
+    monkeypatch.setattr(hc.checks.socket, "gethostname", lambda: "hst-exp03")
     rows = {r.label: r.value for r in hc.checks.check_system_info().rows}
-    assert rows["Hostname"] == "mpt-kpm03"
-    assert "rancher-mgmt.mpt.mp.br" in rows["Resolved name"]
+    assert rows["Hostname"] == "hst-exp03"
+    assert "xlp-mgmt.domain.com" in rows["Resolved name"]
 
 
 def test_system_info_stays_quiet_when_the_names_agree(monkeypatch, shell):

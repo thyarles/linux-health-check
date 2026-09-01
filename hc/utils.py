@@ -45,8 +45,8 @@ def host_label() -> str:
     NOT socket.getfqdn(). That function takes the kernel's hostname, resolves it
     through /etc/hosts and DNS, and returns the FIRST name it finds there — which
     on a clustered host is routinely a shared VIP rather than the machine. Three
-    RKE2 nodes sitting behind rancher-mgmt.mpt.mp.br each reported themselves as
-    `rancher-mgmt.mpt.mp.br`, so their reports, their subject lines and their
+    RKE2 nodes sitting behind xlp-mgmt.domain.com each reported themselves as
+    `xlp-mgmt.domain.com`, so their reports, their subject lines and their
     saved report files were indistinguishable and their alerts looked like one
     host flapping.
 
@@ -55,10 +55,10 @@ def host_label() -> str:
     identity must not drift.
 
     So the kernel's own hostname wins, and it is usually already qualified
-    (`hostname` printing mpt-kpm03.mpt.mp.br). getfqdn() is consulted for one
+    (`hostname` printing hst-exp03.domain.com). getfqdn() is consulted for one
     narrow purpose — supplying a domain the kernel name lacks — and only when
     it is talking about the same machine. That also avoids adopting getfqdn()'s
-    casing, which resolvers are free to mangle: it answers MPT-KPM03.mpt.mp.br
+    casing, which resolvers are free to mangle: it answers hst-exp03.domain.com
     on a host whose own name is lowercase.
     """
     if _HOST_OVERRIDE:

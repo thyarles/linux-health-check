@@ -41,7 +41,7 @@ def check_system_info() -> Section:
     s.add("Hostname",      host_label())
     # When the resolved name disagrees with the kernel's, say so once. That
     # mismatch is how three RKE2 nodes all came to call themselves
-    # rancher-mgmt.mpt.mp.br, and it is invisible until someone prints both.
+    # xlp-mgmt.domain.com, and it is invisible until someone prints both.
     _resolved = socket.getfqdn()
     if _resolved.split(".")[0].lower() != socket.gethostname().split(".")[0].lower():
         s.add("Resolved name", f"{_resolved}  (shared/VIP name — not used as this host's identity)",
