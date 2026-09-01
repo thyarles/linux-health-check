@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
-Linux Health Check — v2.0
+Linux Health Check
+
+The version lives in hc/utils.py (VERSION) and is set by the release workflow —
+it is deliberately not repeated here, where it only ever went stale.
 
 Usage:
   healthcheck.py [run]             Run all checks and send emails (default)
@@ -22,7 +25,7 @@ from hc.utils     import load_config, REPORT_DIR, freeze_state
 from hc.alerts    import evaluate
 from hc.checks    import (
     check_system_info, check_cpu, check_memory, check_disk,
-    check_processes, check_services, check_docker, check_updates,
+    check_processes, check_services, check_docker, check_kubernetes, check_updates,
     check_users, check_auth_security, check_fail2ban, check_ports,
     check_crontabs, check_suid_files, check_package_changes,
     check_etc_changes, check_log_patterns, check_rootkit,
@@ -47,6 +50,7 @@ def run_all_checks(cfg) -> tuple:
         check_processes(cfg),
         check_services(),
         check_docker(cfg),
+        check_kubernetes(cfg),
         check_updates(cfg),
         check_users(),
         check_auth_security(cfg),

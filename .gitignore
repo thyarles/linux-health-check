@@ -221,3 +221,4 @@ __marimo__/
 state/
 healthcheck.conf
 reports/
+tmp

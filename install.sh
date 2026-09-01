@@ -14,6 +14,7 @@
 # Re-runnable — healthcheck.conf, state/ and reports/ survive upgrades.
 #
 # Env overrides: REPO_TAG REPO_SLUG APP_DIR CONDA_PREFIX_DIR MAIL_DOMAIN CRON_TIME
+#                DOWNLOADER (curl|wget) — force one if the other is broken
 set -euo pipefail
 
 MINICONDA_URL="${MINICONDA_URL:-https://repo.anaconda.com/miniconda/Miniconda3-py312_25.1.1-0-Linux-x86_64.sh}"
@@ -36,17 +37,40 @@ say() { printf '\n==> %s\n' "$*"; }
 die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
 case "${1:-}" in
-    -h|--help) sed -n '2,16p' "$0" | sed 's/^#\ \?//'; printf 'Default tag: %s\n' "$DEFAULT_TAG"; exit 0 ;;
+    -h|--help) sed -n '2,17p' "$0" | sed 's/^#\ \?//'; printf 'Default tag: %s\n' "$DEFAULT_TAG"; exit 0 ;;
 esac
 [ "$(id -u)" -eq 0 ] || die "must run as root (paths under /root)."
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
 # ---------------------------------------------------------------- 1. Miniconda
-if   command -v curl >/dev/null 2>&1; then fetch() { curl -fsSL "$1" -o "$2"; }
-elif command -v wget >/dev/null 2>&1; then fetch() { wget -q -O "$2" "$1"; }
-else die "neither curl nor wget is available."
-fi
+# Old curl builds (RHEL 6, some 7.x) offer only TLS 1.0, which GitHub has
+# refused since 2018 — they fail with "curl: (35) Peer reports incompatible or
+# unsupported protocol version". curl being *present* therefore does not mean it
+# works, so a curl failure falls back to wget rather than aborting the install.
+# Force one with DOWNLOADER=curl or DOWNLOADER=wget.
+have()   { command -v "$1" >/dev/null 2>&1; }
+_curl()  { curl -fsSL "$1" -o "$2"; }
+_wget()  { wget -q -O "$2" "$1"; }
+
+case "${DOWNLOADER:-auto}" in
+    curl) have curl || die "DOWNLOADER=curl but curl is not installed."
+          fetch() { _curl "$1" "$2"; } ;;
+    wget) have wget || die "DOWNLOADER=wget but wget is not installed."
+          fetch() { _wget "$1" "$2"; } ;;
+    auto)
+        if have curl && have wget; then
+            fetch() {
+                _curl "$1" "$2" && return 0
+                printf '    curl could not fetch it (old TLS?) — retrying with wget\n' >&2
+                _wget "$1" "$2"
+            }
+        elif have curl; then fetch() { _curl "$1" "$2"; }
+        elif have wget; then fetch() { _wget "$1" "$2"; }
+        else die "neither curl nor wget is available."
+        fi ;;
+    *) die "DOWNLOADER must be 'curl', 'wget', or unset." ;;
+esac
 
 if [ -x "$PY" ]; then
     say "Miniconda already present at $CONDA_PREFIX_DIR — skipping install."

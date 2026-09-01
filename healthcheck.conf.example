@@ -1,4 +1,4 @@
-# healthcheck.conf — Linux Health Check v2.0
+# healthcheck.conf — Linux Health Check
 # =============================================================
 # Copy this file to healthcheck.conf in the same directory as
 # healthcheck.py and edit the values below for this server.
@@ -22,8 +22,9 @@ username =
 password =
 
 # The From: address that will appear in all emails sent by this script.
-# Adjust to match the sending hostname.
-from = healthcheck@mpt-intra02.domain.com
+# Leave it commented out to use healthcheck@<this host's FQDN>, which is right
+# on almost every host. Uncomment only when the relay demands a fixed sender.
+#from = healthcheck@domain.com
 
 
 [email]
@@ -87,6 +88,50 @@ list_local_ports = false
 # 90 minutes, and each one looked like a fresh configuration change.
 etc_ignore = /etc/CommVaultRegistryBackups/*
 
+# Extra mount points to skip in the disk check (comma separated globs), ON TOP
+# OF a built-in list that already covers kubelet, containerd, docker and snap.
+# Those built-ins exist because Kubernetes bind-mounts a pod's subPaths and its
+# local-path PVCs off the root filesystem: df reports each one with the ROOT
+# device's own numbers, so a node running forty such pods printed forty
+# identical rows — and forty identical alerts the moment / crossed 90%.
+# Add a path here only if some other tool mounts noise this list misses.
+disk_ignore =
+
+# Explicit kubeconfig for the Kubernetes section. Leave blank to auto-discover
+# $KUBECONFIG, /etc/rancher/rke2/rke2.yaml, /etc/rancher/k3s/k3s.yaml,
+# /etc/kubernetes/admin.conf and ~/.kube/config.
+kubeconfig =
+
+
+[kubernetes]
+# This whole section appears only on a host that has BOTH kubectl and a
+# readable kubeconfig. A kubectl that cannot reach a cluster says nothing worth
+# printing, so nothing is printed.
+#
+# Note the section finds kubectl by absolute path as well as by $PATH. The
+# cron entry runs with PATH=/usr/bin:/bin and no login profile, so the
+# `export PATH=/var/lib/rancher/rke2/bin:$PATH` that makes kubectl work in your
+# shell does not exist during the nightly run.
+
+# auto    — the whole cluster, plus a per-node pod summary when the cluster has
+#           more than one node (so each node's report leads with its own pods)
+# cluster — always the whole cluster
+# node    — only the pods scheduled on this host
+# off     — no Kubernetes section at all
+scope = auto
+
+# Individual signals, so one noisy source can be silenced without losing the
+# rest of the section.
+nodes  = true
+pods   = true
+pvcs   = true
+events = true
+images = true
+
+# Container images churn on every deploy, so the default is a count only.
+# Set true to also list the largest ones.
+list_images = false
+
 
 [thresholds]
 # CPU usage per core — percentage that triggers each level
@@ -131,6 +176,21 @@ banned_ips_caution = 0
 # as a fresh crash (CAUTION). Anything stopped longer ago is assumed to have
 # been stopped deliberately and is reported as INFO.
 docker_recent_hours = 24
+
+# Kubernetes: a pod Pending or ContainerCreating for less than this is the
+# scheduler doing its job. Past it, something is actually stuck.
+k8s_pending_minutes = 15
+
+# A pod's restart COUNT is meaningless — 200 days up with 5 restarts is a
+# healthy pod. What matters is how many it picked up SINCE THE LAST RUN.
+k8s_restart_delta_caution = 3
+
+# Evicted pod objects persist until they are garbage collected, so an eviction
+# from last month is not today's news. Only recent ones raise CAUTION.
+k8s_evicted_recent_hours = 24
+
+# Guard rail: stop reading the pod list past this many rows.
+k8s_max_pods = 2000
 
 
 [crontab]

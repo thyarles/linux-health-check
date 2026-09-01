@@ -454,12 +454,27 @@ def _summary_text(sections: list) -> list:
     return lines + [""]
 
 
+def _fit_host(template: str, host: str, width: int = W) -> str:
+    """Compose a header/footer line inside `width` columns.
+
+    The hostname is the only elastic part of these lines, and on a cloud host a
+    fully-qualified name is routinely 60+ characters on its own — enough to push
+    the line past the width every other line is wrapped to. The leftmost label
+    is what identifies the machine, so it is the domain tail that gets dropped.
+    """
+    line = template.format(host=host)
+    over = len(line) - width
+    if over <= 0:
+        return line
+    return template.format(host=host[:max(len(host) - over - 1, 8)] + "…")
+
+
 def generate_plain(sections: list, overall: str, decision=None) -> str:
     """Compact plain text — used for the email body."""
     hostname = socket.getfqdn()
     ordered  = order_sections(sections)
     lines    = [
-        f"Linux Health Check v{VERSION} — {hostname} — {_now()}",
+        _fit_host(f"Linux Health Check v{VERSION} — {{host}} — {_now()}", hostname),
         f"Overall Status : {_c(overall)['word']}",
         "=" * W,
     ]
@@ -475,7 +490,8 @@ def generate_plain(sections: list, overall: str, decision=None) -> str:
                 lines.append(f"  {row.label}")
             else:
                 lines += _row_lines(row)
-    lines += ["", "=" * W, f"Linux Health Check v{VERSION} · {hostname}"]
+    lines += ["", "=" * W,
+              _fit_host(f"Linux Health Check v{VERSION} · {{host}}", hostname)]
     return "\n".join(lines)
 
 
@@ -487,7 +503,7 @@ def generate_text(sections: list, overall: str, decision=None) -> str:
 
     lines = [
         "=" * W,
-        f"  Linux Health Check v{VERSION}  ·  {hostname}",
+        _fit_host(f"  Linux Health Check v{VERSION}  ·  {{host}}", hostname),
         f"  {_now()}",
         f"  Overall Status: {ov['sym']}  {ov['word']}",
         "=" * W,

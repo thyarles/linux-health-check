@@ -430,6 +430,29 @@ def test_missing_tools_are_informational_not_caution(shell, tools):
     assert alert_messages(section) == []
 
 
+def test_optional_tools_that_are_absent_say_nothing(shell, tools):
+    """A plain web server has no docker and never will. Suggesting `dnf install
+    docker-ce` to it every morning — and, worse, `install kubectl` — is advice
+    that can only ever be permanent noise.
+    """
+    labels = " ".join(r.label for r in check_tools().rows)
+    for absent in ("docker", "kubectl", "crictl", "rkhunter", "fail2ban-client"):
+        assert absent not in labels
+
+
+def test_required_tools_that_are_absent_still_offer_the_install_command(shell, tools):
+    """These reduce coverage of checks the host IS running, so they stay."""
+    section = check_tools()
+    assert "mpstat" in " ".join(r.label for r in section.rows)
+    assert any("Not installed" in r.value for r in section.rows)
+
+
+def test_an_optional_tool_appears_once_it_is_installed(shell, tools):
+    tools.add("docker")
+    section = check_tools()
+    assert _status_of(section, "[optional] docker") == OK
+
+
 def test_fail2ban_bans_are_the_system_working(cfg, shell, tools):
     tools.add("fail2ban-client")
     shell.expect("fail2ban-client status sshd", "Currently banned:\t14\nTotal banned:\t320")
@@ -518,6 +541,83 @@ def test_busy_cores_are_still_named(cfg, shell, tools):
     section = check_cpu(cfg)
     assert "CPU 9" in [r.label for r in section.rows]
     assert "98.0% used" in [r.value for r in section.rows if r.label == "CPU 9"][0]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Disk: a Kubernetes node is not forty disks
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_pod_sandbox_shm_mounts_are_not_disks(cfg, shell, no_state):
+    """The reported symptom. One 64MB shm tmpfs per pod, always 0%, with a new
+    identity every time a pod restarts — so the delta state churned forever too.
+
+    They survived the old filter because it greps the DEVICE column for 'tmpfs'
+    and a sandbox shm mount's device is literally 'shm'.
+    """
+    sandbox = ("/run/k3s/containerd/io.containerd.grpc.v1.cri/sandboxes/"
+               "{}/shm")
+    shell.expect("df -Pk", "\n".join(
+        ["/dev/sda1 1000000 400000 600000 40% /"]
+        + [f"shm 65536 0 65536 0% {sandbox.format(h * 64)}"
+           for h in ("f0fa", "62db", "37fd")]))
+    section = check_disk(cfg)
+    assert [r.label for r in section.rows] == ["/"]
+
+
+def test_kubelet_bind_mounts_do_not_multiply_one_filesystem(cfg, shell, no_state):
+    """The dangerous half. A subPath or local-path PVC is a bind mount of the
+    root filesystem, so df reports it with the ROOT device and the root's
+    numbers. Forty such pods once meant forty identical rows — and, the moment /
+    crossed 90%, forty identical alerts each with its own fingerprint.
+    """
+    root = "/dev/sda1 1000000 910000 90000 91% /"
+    binds = [f"/dev/sda1 1000000 910000 90000 91% /var/lib/kubelet/pods/uid-{i}"
+             f"/volume-subpaths/data/app/0" for i in range(40)]
+    shell.expect("df -Pk", "\n".join([root] + binds))
+    section = check_disk(cfg)
+    assert [r.label for r in section.rows] == ["/"]
+    assert len(alert_messages(section)) == 1
+
+
+def test_a_bind_mount_outside_the_glob_list_is_still_deduplicated(cfg, shell, no_state):
+    """Globs only catch paths someone anticipated. Identical device, size, used
+    and free means the same filesystem whatever it is mounted at, and the
+    shortest mount point wins so '/' always survives."""
+    shell.expect("df -Pk", "\n".join([
+        "/dev/sda1 1000000 910000 90000 91% /",
+        "/dev/sda1 1000000 910000 90000 91% /some/vendor/bind/mount",
+    ]))
+    section = check_disk(cfg)
+    assert [r.label for r in section.rows if not r.label.startswith("Hidden")] == ["/"]
+    assert any(r.label == "Hidden Mounts" for r in section.rows)
+
+
+def test_a_dedicated_filesystem_under_an_ignored_prefix_is_still_reported(cfg, shell,
+                                                                         no_state):
+    """The trailing '/*' in the globs is load-bearing: /var/lib/docker/* skips
+    per-container mounts while a real filesystem mounted AT /var/lib/docker —
+    the one people actually want to watch — is kept."""
+    shell.expect("df -Pk", "\n".join([
+        "/dev/sda1 1000000 400000 600000 40% /",
+        "/dev/sdb1 5000000 4800000 200000 96% /var/lib/docker",
+        "/dev/sdb1 5000000 4800000 200000 96% /var/lib/docker/overlay2/abc/merged",
+    ]))
+    section = check_disk(cfg)
+    assert "/var/lib/docker" in [r.label for r in section.rows]
+    assert _status_of(section, "/var/lib/docker") == UNHEALTHY
+
+
+def test_disk_ignore_is_additive_not_a_replacement(cfg, shell, no_state):
+    """A host that needs one extra path must not silently lose the built-in
+    container list."""
+    cfg.set("checks", "disk_ignore", "/mnt/backup-scratch/*")
+    shell.expect("df -Pk", "\n".join([
+        "/dev/sda1 1000000 400000 600000 40% /",
+        "/dev/sdc1 900 800 100 89% /mnt/backup-scratch/tmp",
+        "shm 65536 0 65536 0% /run/k3s/containerd/x/shm",
+    ]))
+    section = check_disk(cfg)
+    assert [r.label for r in section.rows] == ["/"]
 
 
 def test_disk_rows_carry_a_meter(cfg, shell, no_state):

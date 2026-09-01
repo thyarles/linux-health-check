@@ -1,5 +1,6 @@
 import configparser
 import datetime
+import fnmatch
 import shlex
 import html as _htmllib
 import pathlib
@@ -192,28 +193,89 @@ def check_memory(cfg: configparser.ConfigParser) -> Section:
     return s
 
 
+# Mount points a container runtime creates that are not this host's storage.
+# Note fnmatch's '*' crosses '/' — the opposite of shell globbing — which is why
+# one trailing '*' covers a whole subtree. The trailing '/*' also matters: it
+# skips the per-container mounts *under* a path while still reporting a
+# dedicated filesystem mounted at the path itself, which is the one worth
+# watching.
+_DISK_IGNORE_DEFAULT = (
+    "/var/lib/kubelet/pods/*",                   # subPath / local-volume / emptyDir binds
+    "/var/lib/kubelet/plugins/*",                # CSI globalmount stage dirs
+    "/var/lib/kubelet/plugins_registry/*",
+    "/run/k3s/containerd/*",                     # k3s AND rke2 sandbox shm + rootfs
+    "/var/lib/rancher/k3s/agent/containerd/*",
+    "/var/lib/rancher/rke2/agent/containerd/*",
+    "/run/containerd/*",
+    "/var/lib/containerd/*",
+    "/var/lib/containers/storage/*",             # podman / CRI-O
+    "/var/lib/docker/containers/*",
+    "/var/lib/docker/overlay2/*",
+    "/var/lib/docker/plugins/*",
+    "/run/netns/*", "/var/run/netns/*", "/run/docker/netns/*",
+    "/snap/*", "/var/snap/*",
+)
+
+
+def _disk_ignore_globs(cfg: configparser.ConfigParser) -> list:
+    """Mount globs to skip: the built-in container set plus healthcheck.conf.
+
+    Additive, same contract as etc_ignore — the config adds to the defaults
+    rather than replacing them, so a host that needs one extra path does not
+    silently lose the whole container list.
+    """
+    extra = cfg.get("checks", "disk_ignore", fallback="")
+    return list(_DISK_IGNORE_DEFAULT) + [
+        p.strip() for p in extra.replace("\n", ",").split(",") if p.strip()
+    ]
+
+
 def check_disk(cfg: configparser.ConfigParser) -> Section:
     s = Section("Disk Usage")
     thr_c = cfg.getfloat("thresholds", "disk_caution",   fallback=90.0)
     thr_u = cfg.getfloat("thresholds", "disk_unhealthy", fallback=95.0)
     prev    = load_state("disk_pct") or {}
     current: dict = {}
+    globs   = _disk_ignore_globs(cfg)
 
-    _, out, _ = run("df -Pk | grep -Ev '^Filesystem|tmpfs|udev|devtmpfs|overlay|squashfs'")
+    # 'shm' and 'nsfs' are named devices, not types: a pod sandbox's 64MB shm
+    # mount reports the device 'shm', so filtering on 'tmpfs' never caught it.
+    _, out, _ = run("df -Pk | grep -Ev "
+                    "'^Filesystem|tmpfs|udev|devtmpfs|overlay|squashfs|^shm |^nsfs '")
+
+    rows = []
     for line in out.splitlines():
         parts = line.split()
         if len(parts) < 6:
             continue
-        mount   = parts[5]
-        if mount.startswith('/snap/') or mount.startswith('/var/snap/'):
+        mount = parts[5]
+        if any(fnmatch.fnmatch(mount, g) for g in globs):
             continue
-        pct_str = parts[4].rstrip("%")
         try:
-            pct   = float(pct_str)
+            pct   = float(parts[4].rstrip("%"))
             size  = int(parts[1]) * 1024
             used  = int(parts[2]) * 1024
             avail = int(parts[3]) * 1024
         except (ValueError, IndexError):
+            continue
+        rows.append((parts[0], size, used, avail, pct, mount))
+
+    # A bind mount reports the SAME device, size, used and free as its source.
+    # One filesystem is one fact: forty pods bind-mounting subPaths off / must
+    # not produce forty identical rows — nor, when / crosses 90%, forty
+    # identical alerts, each with its own fingerprint in alerts.py.
+    # Shortest mount path wins, so '/' always survives.
+    best: dict = {}
+    for r in rows:
+        key = r[:4]
+        if key not in best or len(r[5]) < len(best[key][5]):
+            best[key] = r
+
+    hidden = 0
+    for r in rows:
+        device, size, used, avail, pct, mount = r
+        if best[r[:4]] is not r:
+            hidden += 1
             continue
         st = UNHEALTHY if pct >= thr_u else (CAUTION if pct >= thr_c else OK)
         if st in (CAUTION, UNHEALTHY):
@@ -222,6 +284,11 @@ def check_disk(cfg: configparser.ConfigParser) -> Section:
         s.add(mount,
               f"{pct:.1f}% used  ({_fmt_bytes(used)} of {_fmt_bytes(size)}, {_fmt_bytes(avail)} free)",
               st, meter=pct, delta=_delta_note(prev, mount, pct))
+
+    if hidden:
+        s.add("Hidden Mounts",
+              f"{hidden} bind/container mount(s) on filesystems already listed", INFO,
+              detail="adjust with disk_ignore in healthcheck.conf")
 
     save_state("disk_pct", current)
     return s
@@ -397,6 +464,602 @@ def check_docker(cfg: configparser.ConfigParser) -> Section:
                 s.add(parts[0], parts[1], INFO)
 
     return s
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Kubernetes
+#
+# Everything here goes through run() and has(), including the filesystem
+# probes, because those two functions are the only seams the tests fake.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Where kubectl actually lands. This list exists because of cron: the managed
+# entry sets no PATH and cron does not read a login profile, so the nightly run
+# sees PATH=/usr/bin:/bin. The rke2 control planes export
+# PATH=/var/lib/rancher/rke2/bin in an interactive profile — invisible to cron.
+# shutil.which() therefore reports "no kubectl" on precisely the hosts this
+# check exists for, which is why the absolute paths are mandatory.
+_KUBECTL_PATHS = (
+    "/var/lib/rancher/rke2/bin/kubectl",
+    "/usr/local/bin/kubectl",              # k3s
+    "/usr/bin/kubectl",
+    "/opt/bin/kubectl",
+    "/snap/bin/kubectl",
+)
+
+# Same story for crictl. On k3s/rke2 it is a symlink to the server binary that
+# dispatches on argv[0].
+_CRICTL_PATHS = (
+    "/var/lib/rancher/rke2/bin/crictl",
+    "/usr/local/bin/crictl",
+    "/usr/bin/crictl",
+    "/opt/bin/crictl",
+)
+
+# rke2 keeps k3s's containerd socket path.
+_CRI_SOCKETS = (
+    "/run/k3s/containerd/containerd.sock",
+    "/run/containerd/containerd.sock",
+    "/var/run/crio/crio.sock",
+)
+
+# Order matters: the node's own admin config beats a ~/.kube/config a human
+# copied there and forgot about.
+_KUBECONFIG_PATHS = (
+    "/etc/rancher/rke2/rke2.yaml",
+    "/etc/rancher/k3s/k3s.yaml",
+    "/etc/kubernetes/admin.conf",
+    "/root/.kube/config",
+    "$HOME/.kube/config",
+)
+
+_K8S_TIMEOUT = 15
+
+
+def _first_existing(candidates: tuple, test: str = "-r") -> str:
+    """First candidate that exists, resolved in one shell call.
+
+    `test` is '-r' for files (readable, not merely present — an unreadable
+    kubeconfig is a permanent condition, never a daily CAUTION) or '-S' for
+    sockets.
+    """
+    quoted = " ".join('"%s"' % c for c in candidates)
+    _, out, _ = run(
+        'for f in %s; do [ -n "$f" ] && [ %s "$f" ] && { echo "$f"; break; }; done'
+        % (quoted, test), timeout=10)
+    return out.strip().splitlines()[0] if out.strip() else ""
+
+
+def _first_executable(candidates: tuple) -> str:
+    """First candidate that is an executable, resolved in one shell call.
+
+    `command -v` on an absolute path prints it only if it is executable, and is
+    POSIX so it works under dash and ash as well as bash.
+    """
+    quoted = " ".join('"%s"' % c for c in candidates)
+    _, out, _ = run(
+        'for b in %s; do command -v "$b" >/dev/null 2>&1 && { echo "$b"; break; }; done'
+        % quoted, timeout=10)
+    return out.strip().splitlines()[0] if out.strip() else ""
+
+
+def _kubectl_bin() -> str:
+    return "kubectl" if has("kubectl") else _first_executable(_KUBECTL_PATHS)
+
+
+def _kubeconfig(cfg: configparser.ConfigParser) -> str:
+    explicit = cfg.get("checks", "kubeconfig", fallback="").strip()
+    cands = ((explicit,) if explicit else ()) + ("$KUBECONFIG",) + _KUBECONFIG_PATHS
+    return _first_existing(cands)
+
+
+# kubectl's AGE column, produced by apimachinery's HumanDuration: 45s, 5m30s,
+# 3h20m, 5d3h, 2y40d. No weeks and no months, unlike the Docker humaniser that
+# _status_age_hours handles.
+_K8S_AGE_RE    = re.compile(r"(\d+)([smhdy])")
+_K8S_AGE_UNITS = {"s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0, "y": 31536000.0}
+
+
+def _k8s_age_seconds(age: str) -> float:
+    """Seconds from a kubectl AGE cell; -1 when it cannot be read."""
+    total = 0.0
+    for qty, unit in _K8S_AGE_RE.findall(age):
+        total += float(qty) * _K8S_AGE_UNITS[unit]
+    return total if total else -1.0     # '<unknown>' — do not escalate on age
+
+
+def _parse_pod_line(line: str) -> dict:
+    """NAMESPACE NAME READY STATUS RESTARTS AGE.
+
+    RESTARTS is '12' before kubectl 1.23 and '12 (5m ago)' after, so the line
+    has six tokens or eight, never seven. Anchor on both ends — restarts at
+    index 4, AGE always last — and never on a token count. Namespace and pod
+    names are RFC 1123 labels, so they can never contain whitespace.
+    """
+    p = line.split()
+    if len(p) < 6:
+        return {}
+    ready = p[2]
+    r_ready, _, r_total = ready.partition("/")
+    try:
+        restarts = int(p[4])
+    except ValueError:
+        restarts = 0
+    return {
+        "ns":       p[0],
+        "name":     p[1],
+        "ready":    ready,
+        "ready_n":  int(r_ready) if r_ready.isdigit() else 0,
+        "ready_of": int(r_total) if r_total.isdigit() else 0,
+        "status":   p[3],
+        "restarts": restarts,
+        # Display only. It does not exist before kubectl 1.23, so nothing may
+        # ever classify on it.
+        "since":    " ".join(p[5:-1]).strip("()") if len(p) >= 8 and p[5].startswith("(") else "",
+        "age_s":    _k8s_age_seconds(p[-1]),
+        "age":      p[-1],
+    }
+
+
+_K8S_BROKEN = (
+    "crashloopbackoff", "imagepullbackoff", "errimagepull", "error",
+    "createcontainerconfigerror", "createcontainererror", "invalidimagename",
+    "runcontainererror", "oomkilled",
+)
+_K8S_SETTLING = ("pending", "containercreating", "podinitializing", "terminating")
+_K8S_DONE     = ("completed", "succeeded")
+
+_K8S_PRESSURE = ("MemoryPressure", "DiskPressure", "PIDPressure", "NetworkUnavailable")
+
+# Warning events that describe the NODE running out of something. Everything
+# else — Unhealthy probe blips, BackOff, FailedScheduling — is routine on a busy
+# cluster at any volume, and is reported as a count only.
+_K8S_SERIOUS_EVENTS = frozenset((
+    "SystemOOM", "OOMKilling", "NodeHasInsufficientMemory", "NodeHasDiskPressure",
+    "NodeHasInsufficientPID", "FreeDiskSpaceFailed", "ImageGCFailed",
+    "ContainerGCFailed", "EvictionThresholdMet", "Evicted", "NodeNotReady",
+    "InvalidDiskCapacity", "KubeletSetupFailed", "HostPortConflict",
+    "FailedAttachVolume",
+))
+
+# kubectl's own wording, not errno strings: a refused connection reads "The
+# connection to the server 127.0.0.1:6443 was refused - did you specify the
+# right host or port?", which matches none of the obvious phrases.
+_K8S_UNREACHABLE = ("refused", "no such host", "i/o timeout", "timeout",
+                    "unable to connect to the server", "network is unreachable",
+                    "did you specify the right host", "tls handshake", "eof")
+_K8S_DENIED      = ("forbidden", "unauthorized", "you must be logged in",
+                    "certificate has expired", "x509", "invalid bearer token")
+
+# Double quotes inside, single quotes outside — kubectl's own documented idiom.
+# A literal {'|'} would close the shell's single quote and turn the separator
+# into a pipe, which is exactly what it did the first time this ran.
+_NODES_JSONPATH = (
+    '{range .items[*]}'
+    '{.metadata.name}{"|"}'
+    '{.spec.unschedulable}{"|"}'
+    '{.status.nodeInfo.kubeletVersion}{"|"}'
+    '{range .status.conditions[*]}{.type}{"="}{.status}{","}{end}{"|"}'
+    '{range .status.addresses[*]}{.address}{","}{end}'
+    '{"\\n"}{end}'
+)
+
+
+def _k8s_nodes(kc: str) -> tuple:
+    """(nodes, error). One jsonpath call carries name, cordon, version,
+    every condition and every address — node conditions cost no second query.
+
+    jsonpath rather than the table because the ROLES column spelling changed
+    twice (master -> control-plane,master -> control-plane) and STATUS is a
+    comma-joined token. --allow-missing-template-keys because
+    .spec.unschedulable is omitempty and absent on every healthy node.
+    """
+    rc, out, err = run(
+        "%s get nodes -o jsonpath='%s' --allow-missing-template-keys=true 2>&1"
+        % (kc, _NODES_JSONPATH), timeout=_K8S_TIMEOUT + 10)
+    if rc != 0 or not out or out.lstrip().lower().startswith("error"):
+        return [], (out or err or "no output")
+    nodes = []
+    for line in out.splitlines():
+        if "|" not in line:
+            continue
+        parts = line.split("|")
+        if len(parts) < 5:
+            continue
+        conds = {}
+        for c in parts[3].split(","):
+            if "=" in c:
+                k, _, v = c.partition("=")
+                conds[k] = v
+        nodes.append({
+            "name":      parts[0],
+            "cordoned":  parts[1].strip().lower() == "true",
+            "version":   parts[2],
+            "conditions": conds,
+            "addresses": {a for a in parts[4].split(",") if a},
+        })
+    return nodes, ""
+
+
+def _this_node(nodes: list) -> dict:
+    """Which node is this host.
+
+    Node names are usually the lowercased short hostname, but --node-name and
+    cloud providers break that, so fall back to matching an address the node
+    reports against this host's own IPs.
+    """
+    fqdn  = socket.getfqdn().lower()
+    names = {fqdn, fqdn.split(".")[0], socket.gethostname().lower()}
+    for n in nodes:
+        if n["name"].lower() in names:
+            return dict(n)
+    _, out, _ = run("hostname -I 2>/dev/null", timeout=10)
+    mine = set(out.split())
+    if mine:
+        for n in nodes:
+            if mine & n["addresses"]:
+                return dict(n)
+    return {}
+
+
+def _k8s_flag(cfg: configparser.ConfigParser, name: str, default: bool = True) -> bool:
+    return cfg.getboolean("kubernetes", name, fallback=default)
+
+
+def check_kubernetes(cfg: configparser.ConfigParser) -> Section:
+    s = Section("Kubernetes")
+
+    scope = cfg.get("kubernetes", "scope", fallback="auto").strip().lower()
+    if scope == "off":
+        s.not_applicable("Disabled in healthcheck.conf")
+        return s
+
+    kubectl = _kubectl_bin()
+    kcfg    = _kubeconfig(cfg)
+
+    # A kubectl with nothing to talk to says nothing worth printing, and a host
+    # that will never run Kubernetes must not be told to install it.
+    if not kubectl and not kcfg:
+        s.not_applicable("Not a Kubernetes node")
+        return s
+    if kubectl and not kcfg:
+        s.not_applicable("kubectl present but no readable kubeconfig "
+                         "(agent node or client-only host)")
+        return s
+    if kcfg and not kubectl:
+        s.add("kubectl", f"kubeconfig at {kcfg} but kubectl is not installed", INFO)
+        s.need_tool("kubectl", rhel_pkg="kubernetes-client", deb_pkg="kubectl",
+                    optional=True)
+        return s
+
+    # --request-timeout as well as run()'s: run() uses shell=True, so its own
+    # timeout kills the shell, not necessarily a kubectl still retrying.
+    kc = "%s --kubeconfig %s --request-timeout=%ds" % (
+        kubectl, shlex.quote(kcfg), _K8S_TIMEOUT)
+
+    # The node query IS the reachability probe — no wasted round trip, and no
+    # `get --raw /readyz`, which needs a nonResourceURL grant a restricted
+    # kubeconfig may not have.
+    nodes, err = _k8s_nodes(kc)
+    if err:
+        low = err.lower()
+        if any(t in low for t in _K8S_DENIED):
+            why = "credentials rejected by the API server"
+        elif any(t in low for t in _K8S_UNREACHABLE):
+            why = "API server unreachable"
+        else:
+            why = "kubectl failed: %s" % err.splitlines()[0][:80]
+        s.add("Cluster API", why, CAUTION, detail=kcfg)
+        s.alert(f"Kubernetes API not usable from this host ({why})", CAUTION)
+        return s
+
+    me = _this_node(nodes)
+    if me:
+        s.add("This Node", f"{me['name']}  ({me['version']})",
+              OK, detail=f"{len(nodes)} node(s) in the cluster")
+    else:
+        s.add("This Node", "not a node in this cluster (admin/jump host)", INFO)
+
+    if _k8s_flag(cfg, "nodes"):
+        _k8s_node_rows(s, nodes, me)
+
+    node_scoped = scope == "node" or (scope == "auto" and me and len(nodes) > 1)
+    if _k8s_flag(cfg, "pods"):
+        _k8s_pod_rows(s, cfg, kc, me if node_scoped else {})
+    if _k8s_flag(cfg, "pvcs") and scope != "node":
+        _k8s_pvc_rows(s, kc)
+    if _k8s_flag(cfg, "events"):
+        _k8s_event_rows(s, kc)
+    if _k8s_flag(cfg, "images"):
+        _k8s_image_rows(s, cfg)
+
+    return s
+
+
+def _k8s_node_rows(s: Section, nodes: list, me: dict) -> None:
+    prev_cordoned = set(load_state("k8s_cordoned") or [])
+    cordoned: list = []
+    pressures: list = []
+    not_ready: list = []
+
+    for n in nodes:
+        is_me  = bool(me) and n["name"] == me["name"]
+        ready  = n["conditions"].get("Ready", "Unknown")
+        label  = n["name"] + (" (this host)" if is_me else "")
+
+        if ready != "True":
+            # A node that is down is UNHEALTHY for its own report and CAUTION
+            # for everyone else's — every node runs this check, and only one of
+            # them is the machine the report is about.
+            st = UNHEALTHY if is_me else CAUTION
+            not_ready.append(n["name"])
+            s.add(label, f"NotReady (Ready={ready})", st)
+            continue
+
+        if n["cordoned"]:
+            cordoned.append(n["name"])
+            # Cordoned two runs running is deliberate maintenance, not news —
+            # the same two-sighting rule check_services uses for 'activating'.
+            st = INFO if n["name"] in prev_cordoned else CAUTION
+            s.add(label, "Ready, SchedulingDisabled (cordoned)", st,
+                  detail="" if st == INFO else "cordoned since the last run")
+            continue
+
+        # Pressure conditions reading Unknown are a consequence of a kubelet
+        # that stopped reporting, and Ready above already covers that. Only
+        # True is an independent finding.
+        hot = [c for c in _K8S_PRESSURE if n["conditions"].get(c) == "True"]
+        if hot:
+            pressures.extend(f"{n['name']} {c}" for c in hot)
+            s.add(label, "Ready · " + ", ".join(hot), CAUTION)
+        else:
+            s.add(label, f"Ready  ({n['version']})", OK)
+
+    save_state("k8s_cordoned", cordoned)
+
+    if not_ready:
+        s.alert("Kubernetes node(s) NotReady: " + ", ".join(not_ready[:3])
+                + (f" (+{len(not_ready) - 3} more)" if len(not_ready) > 3 else ""),
+                UNHEALTHY if bool(me) and me["name"] in not_ready else CAUTION)
+    new_cordons = [c for c in cordoned if c not in prev_cordoned]
+    if new_cordons:
+        s.alert("Kubernetes node(s) newly cordoned: " + ", ".join(new_cordons[:3]), CAUTION)
+    if pressures:
+        # DiskPressure stays CAUTION rather than UNHEALTHY: check_disk already
+        # owns disk severity for this host, and escalating one fact from two
+        # sections is noise.
+        s.alert("Kubernetes node pressure: " + ", ".join(pressures[:3])
+                + (f" (+{len(pressures) - 3} more)" if len(pressures) > 3 else ""),
+                CAUTION)
+
+
+def _k8s_pod_rows(s: Section, cfg: configparser.ConfigParser, kc: str, me: dict) -> None:
+    cmd = "%s get pods --all-namespaces --no-headers" % kc
+    if me:
+        cmd += " --field-selector=spec.nodeName=%s" % shlex.quote(me["name"])
+    rc, out, err = run(cmd + " 2>&1", timeout=_K8S_TIMEOUT + 10)
+    if rc != 0 or "no resources found" in (out or "").lower():
+        if rc != 0:
+            s.add("Pods", (out or err or "query failed").splitlines()[0][:80], INFO)
+        return
+
+    pend_s  = cfg.getfloat("thresholds", "k8s_pending_minutes",      fallback=15.0) * 60
+    evict_s = cfg.getfloat("thresholds", "k8s_evicted_recent_hours", fallback=24.0) * 3600
+    delta_c = cfg.getint("thresholds",   "k8s_restart_delta_caution", fallback=3)
+    max_pods = cfg.getint("thresholds",  "k8s_max_pods",              fallback=2000)
+
+    prev_r   = load_state("k8s_pod_restarts") or {}
+    prev_deg = set(load_state("k8s_degraded_pods") or [])
+    now_r, degraded, problems = {}, [], []
+    running = done = quiet = 0
+
+    lines = out.splitlines()[:max_pods]
+    for line in lines:
+        p = _parse_pod_line(line)
+        if not p:
+            continue
+        key  = "%s/%s" % (p["ns"], p["name"])
+        low  = p["status"].lower()
+        now_r[key] = p["restarts"]
+
+        # The restart COUNT is meaningless — 200 days up with 5 restarts is a
+        # healthy pod. The GROWTH since the last run is the signal. Keyed on
+        # ns/name, so a rolling deploy's new pod hash starts from zero rather
+        # than firing.
+        grew = p["restarts"] - int(prev_r.get(key, p["restarts"]))
+        note = f"+{grew} restart(s) since last run" if grew >= delta_c else ""
+
+        if low in _K8S_DONE:
+            # helm-install-*, svclb-* and CronJob pods sit Completed for
+            # months. This is the single biggest source of Kubernetes noise,
+            # and the exact analogue of docker's Exited (0) -> INFO.
+            done += 1
+            st = INFO
+        elif any(b in low for b in _K8S_BROKEN):
+            st = CAUTION
+        elif low == "evicted":
+            # Evicted pod objects persist until GC. An eviction from last month
+            # is not today's news.
+            st = CAUTION if 0 <= p["age_s"] <= evict_s else INFO
+        elif low.startswith("init:") or low in _K8S_SETTLING:
+            st = CAUTION if p["age_s"] > pend_s else INFO
+        elif low == "running" and p["ready_of"] and p["ready_n"] < p["ready_of"]:
+            # A pod that restarted thirty seconds before the 07:00 cron is 0/1
+            # for a moment. Only a pod still degraded on the next run is news.
+            degraded.append(key)
+            st = CAUTION if key in prev_deg else INFO
+        elif low == "running":
+            running += 1
+            st = OK
+        else:
+            st = INFO      # unknown printer strings must not invent incidents
+
+        # A pod that looks fine but has picked up restarts since the last run is
+        # not fine. This has to be applied after classification, or a Running
+        # pod would be dismissed as OK before the growth is ever considered.
+        if note and st != CAUTION:
+            st = CAUTION
+
+        if st != CAUTION:
+            if st == INFO and low not in _K8S_DONE:
+                quiet += 1
+            continue
+
+        problems.append(key)
+        detail = "; ".join(x for x in
+                           (note, f"last restart {p['since']}" if p["since"] else "") if x)
+        if len(problems) <= _LIST_CAP:
+            s.add(_htmllib.escape(key),
+                  f"{p['ready']} {_htmllib.escape(p['status'])} · {p['age']}"
+                  + (f" · {p['restarts']} restart(s)" if p["restarts"] else ""),
+                  st, detail=detail)
+
+    save_state("k8s_pod_restarts", now_r)
+    save_state("k8s_degraded_pods", degraded)
+
+    scope_label = "on this host" if me else "cluster-wide"
+    # Healthy pods are a count, never a wall of names. 'settling' keeps young
+    # Pending/ContainerCreating pods visible in the total instead of vanishing.
+    s.add(f"Pods ({scope_label})",
+          f"{running} running · {done} completed"
+          + (f" · {quiet} settling" if quiet else "")
+          + f" · {len(problems)} needing attention",
+          INFO)
+    if len(problems) > _LIST_CAP:
+        s.add("…", f"and {len(problems) - _LIST_CAP} more pod(s) needing attention", INFO)
+    if problems:
+        s.alert("Kubernetes pods: " + ", ".join(problems[:3])
+                + (f" (+{len(problems) - 3} more)" if len(problems) > 3 else ""),
+                CAUTION)
+
+
+def _k8s_pvc_rows(s: Section, kc: str) -> None:
+    # custom-columns, never the table: kubectl 1.31 inserted
+    # VOLUMEATTRIBUTESCLASS before AGE, and the ACCESS MODES header has a space.
+    rc, out, _ = run(
+        "%s get pvc --all-namespaces --no-headers -o custom-columns="
+        "'NS:.metadata.namespace,NAME:.metadata.name,PHASE:.status.phase,"
+        "SC:.spec.storageClassName' 2>&1" % kc, timeout=_K8S_TIMEOUT + 10)
+    if rc != 0 or not out or "no resources found" in out.lower():
+        return
+
+    prev_pending = set(load_state("k8s_pending_pvcs") or [])
+    pending, lost, bound = [], [], 0
+
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        key, phase = "%s/%s" % (parts[0], parts[1]), parts[2]
+        if phase == "Bound":
+            bound += 1
+        elif phase == "Lost":
+            lost.append(key)
+            s.add(_htmllib.escape(key), "Lost — backing volume is gone", UNHEALTHY)
+        elif phase == "Pending":
+            pending.append(key)
+            # local-path and most cloud storage classes are
+            # WaitForFirstConsumer, so a claim with no consumer is legitimately
+            # Pending forever by design. Only one still pending next run is news.
+            st = CAUTION if key in prev_pending else INFO
+            s.add(_htmllib.escape(key),
+                  f"Pending ({parts[3] if len(parts) > 3 else 'no class'})", st,
+                  detail="pending since the last run too" if st == CAUTION else
+                         "may be WaitForFirstConsumer — checked again next run")
+
+    save_state("k8s_pending_pvcs", pending)
+
+    if bound or pending or lost:
+        s.add("PersistentVolumeClaims", f"{bound} bound", INFO)
+    if lost:
+        s.alert("Kubernetes PVC lost: " + ", ".join(lost[:3]), UNHEALTHY)
+    still = [p for p in pending if p in prev_pending]
+    if still:
+        s.alert("Kubernetes PVC still Pending: " + ", ".join(still[:3]), CAUTION)
+
+
+def _k8s_event_rows(s: Section, kc: str) -> None:
+    # `kubectl get events`, not `kubectl events` — the latter only reached GA in
+    # 1.26 and reports a different API with different columns.
+    rc, out, _ = run(
+        "%s get events --all-namespaces --field-selector type=Warning --no-headers "
+        "-o custom-columns='REASON:.reason,COUNT:.count,LAST:.lastTimestamp' 2>&1"
+        % kc, timeout=_K8S_TIMEOUT + 10)
+    if rc != 0 or not out or "no resources found" in out.lower():
+        return
+
+    counts: dict = {}
+    oldest = None
+    total  = 0
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        reason = parts[0]
+        try:
+            # '<none>' on events written through events.k8s.io/v1, which carry
+            # eventTime instead of count.
+            n = int(parts[1])
+        except ValueError:
+            n = 1
+        counts[reason] = counts.get(reason, 0) + n
+        total += n
+        if len(parts) > 2 and parts[2] != "<none>":
+            try:
+                ts = datetime.datetime.strptime(parts[2], "%Y-%m-%dT%H:%M:%SZ")
+            except ValueError:
+                ts = None
+            if ts and (oldest is None or ts < oldest):
+                oldest = ts
+
+    if not counts:
+        return
+
+    # NOT "last 24h": the apiserver's --event-ttl defaults to one hour and both
+    # k3s and rke2 ship that default, so the only honest window is the one the
+    # data itself describes.
+    if oldest:
+        mins   = (datetime.datetime.utcnow() - oldest).total_seconds() / 60
+        window = f"~{mins:.0f}m retained" if mins >= 1 else "just now"
+    else:
+        window = "retained window"
+
+    ranked = sorted(counts.items(), key=lambda kv: -kv[1])
+    s.add("Warning Events",
+          f"{total} in the {window}: "
+          + ", ".join(f"{_htmllib.escape(r)} ×{n}" for r, n in ranked[:5]), INFO)
+
+    serious = [(r, n) for r, n in ranked if r in _K8S_SERIOUS_EVENTS]
+    if serious:
+        s.add("Node-level Events",
+              " · ".join(f"{_htmllib.escape(r)} ×{n}" for r, n in serious[:5]), CAUTION)
+        s.alert("Kubernetes node events: "
+                + ", ".join(f"{r} ×{n}" for r, n in serious[:3]), CAUTION)
+
+
+def _k8s_image_rows(s: Section, cfg: configparser.ConfigParser) -> None:
+    crictl = "crictl" if has("crictl") else _first_executable(_CRICTL_PATHS)
+    if not crictl:
+        return          # a node without crictl is not a defect — say nothing
+    sock = _first_existing(_CRI_SOCKETS, test="-S")
+    cmd  = crictl + (f" --runtime-endpoint unix://{sock}" if sock else "")
+
+    rc, out, _ = run(f"{cmd} images 2>/dev/null | awk 'NR>1'", timeout=_K8S_TIMEOUT)
+    if rc != 0 or not out:
+        return
+    lines = out.splitlines()
+    s.add("Container Images", f"{len(lines)} image(s) via crictl", INFO)
+
+    # Images churn on every deploy, so the listing is a wall and a diff would be
+    # daily noise. Inventory is never CAUTION.
+    if cfg.getboolean("kubernetes", "list_images", fallback=False):
+        for line in lines[:_LIST_CAP]:
+            parts = line.split()
+            if len(parts) >= 4:
+                s.add("  " + _htmllib.escape(parts[0]),
+                      f"{_htmllib.escape(parts[1])}  ({parts[3]})", INFO)
+        if len(lines) > _LIST_CAP:
+            s.add("…", f"and {len(lines) - _LIST_CAP} more image(s)", INFO)
 
 
 def check_updates(cfg: configparser.ConfigParser) -> Section:
@@ -1073,12 +1736,14 @@ def check_network_io() -> Section:
 
 
 _TOOLS = [
-    ("mpstat",          "sysstat",   "sysstat",   False),
-    ("ss",              "iproute",   "iproute2",  False),
-    ("fail2ban-client", "fail2ban",  "fail2ban",  True),
-    ("rkhunter",        "rkhunter",  "rkhunter",  True),
-    ("docker",          "docker-ce", "docker.io", True),
-    ("postfix",         "postfix",   "postfix",   False),
+    ("mpstat",          "sysstat",           "sysstat",   False),
+    ("ss",              "iproute",           "iproute2",  False),
+    ("fail2ban-client", "fail2ban",          "fail2ban",  True),
+    ("rkhunter",        "rkhunter",          "rkhunter",  True),
+    ("docker",          "docker-ce",         "docker.io", True),
+    ("kubectl",         "kubernetes-client", "kubectl",   True),
+    ("crictl",          "cri-tools",         "cri-tools", True),
+    ("postfix",         "postfix",           "postfix",   False),
 ]
 
 
@@ -1090,6 +1755,12 @@ def check_tools() -> Section:
         tag  = "[optional] " if optional else ""
         if installed:
             s.add(f"{tag}{tool}", "Installed", OK)
+        elif optional:
+            # An optional tool the host does not have is not a finding, it is a
+            # fact about what this machine is for. Telling a plain web server to
+            # install docker — or kubectl — every single day is pure noise, so
+            # optional tools appear only when they are actually present.
+            continue
         else:
             cmd = install_cmd(tool, rhel_pkg, deb_pkg)
             # Never CAUTION: a tool that was missing yesterday is missing today

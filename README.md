@@ -24,6 +24,7 @@ whole thing in one command. See [Quick Install](#quick-install).
 | `healthcheck.conf.example` | Config template — copy to `healthcheck.conf` and edit | yes |
 | `install.sh` | One-command installer: private Python + tagged release + cron | run on server |
 | `pyproject.toml`, `tests/`, `uv.lock`, `Makefile` | Dev toolchain only | **no** |
+| `.github/workflows/`, `scripts/set-version.sh` | CI and the release/version automation | **no** |
 
 When deployed, the script creates two subdirectories next to itself:
 
@@ -40,6 +41,10 @@ When deployed, the script creates two subdirectories next to itself:
     ├── crontabs.json
     ├── suid_files.json
     ├── activating.json
+    ├── k8s_pod_restarts.json  ← Kubernetes, when the host is a cluster node
+    ├── k8s_degraded_pods.json
+    ├── k8s_cordoned.json
+    ├── k8s_pending_pvcs.json
     └── alerts.json            ← which conditions have already been notified
 ```
 
@@ -67,7 +72,9 @@ wrote actually points at the private interpreter** before reporting success.
 
 With no tag argument it installs the release pinned as `DEFAULT_TAG` at the top
 of `install.sh`. Because `install.sh` is always fetched from `main`, that one
-line is what "current" means — **bump it on `main` whenever you cut a tag.**
+line is what "current" means. It is bumped for you: the
+[release workflow](#releases) rewrites it and commits it to `main` as part of
+cutting each tag, so `main` and the newest release can never disagree.
 
 It is pinned rather than resolved from the GitHub API on purpose: the
 unauthenticated API allows 60 calls per hour *per IP*, so one shared office NAT
@@ -88,10 +95,17 @@ installed tag is recorded in `.installed-version`.
 | `MAIL_DOMAIN` | `mpt.mp.br` | Replaces `domain.com` in the generated config |
 | `CRON_TIME` | `07:00` | Daily run time |
 | `REPO_SLUG` | `thyarles/linux-health-check` | Source repo |
+| `DOWNLOADER` | auto | Force `curl` or `wget` when the other is broken |
 
 Needs `curl` or `wget` and `tar` — no `git`, and no GitHub API. Tags before
 `v2.0.1` hardcode `/usr/bin/python3` and will be rejected by the verification
 step.
+
+On very old hosts curl may exist but be unusable: builds that offer only TLS 1.0
+fail against GitHub with `curl: (35) Peer reports incompatible or unsupported
+protocol version`. The installer treats a curl failure as a reason to retry with
+wget rather than to abort, so those hosts install unattended. `DOWNLOADER=wget`
+skips curl entirely.
 
 ---
 
@@ -258,6 +272,7 @@ and became unreadable. Half a dark theme is worse than none.
 - **Top processes** — top 10 by memory, top 10 by CPU, zombie count (thresholds configurable; a few zombies are routine)
 - **System services** — `systemctl` failed units; a unit is only "stuck activating" if it was still activating on the previous run
 - **Docker** — containers; a *fresh* non-zero exit or a restart loop is CAUTION, a container stopped long ago is INFO (assumed deliberate), and `Up (unhealthy)` is flagged
+- **Kubernetes** — appears only on a host that has **both** `kubectl` and a readable kubeconfig, so a machine that will never run Kubernetes shows nothing. Node Ready/cordon state and pressure conditions, unhealthy pods, unbound PVCs, aggregated Warning events, and a container image count via `crictl`. Everything is filtered for the noise a cluster generates by design: `Completed` helm/CronJob pods, month-old `Evicted` objects, PVCs that are `Pending` because their storage class is `WaitForFirstConsumer`, and pods that happened to be restarting when cron fired are all INFO. A pod's restart *count* is ignored — only growth **since the last run** raises CAUTION. Discovery searches absolute paths (`/var/lib/rancher/rke2/bin`, `/usr/local/bin`, …) as well as `$PATH`, because cron runs with `PATH=/usr/bin:/bin` and never sees the `export PATH=...` that makes `kubectl` work in your shell
 - **Pending updates** — package count via yum/dnf/apt, plus a correct Debian security count. Reported as INFO by default: patching backlog is planned maintenance, not an incident. Set `updates_caution` / `security_updates_caution` to make it escalate.
 - **Network I/O** — RX/TX bytes per interface, active connection summary
 
@@ -275,7 +290,8 @@ and became unreadable. Half a dark theme is worse than none.
 - **Rootkit indicators** — `rkhunter` output (if installed), known suspicious file paths, and hidden-process detection that brackets `ps` with two `/proc` reads so that processes merely starting or exiting are not reported as hidden
 
 ### Tooling Status
-- Every report includes a **System Tools Status** section listing which monitoring tools are installed or missing, with the exact install command for the detected package manager. Reported as INFO: a tool that was missing yesterday is missing today for the same reason, so it could only ever be permanent noise. Act on it with `healthcheck.py bootstrap`.
+- Every report includes a **System Tools Status** section listing the tools it relies on, with the exact install command for the detected package manager. Reported as INFO: a tool that was missing yesterday is missing today for the same reason, so it could only ever be permanent noise. Act on it with `healthcheck.py bootstrap`.
+- **Optional** tools (`docker`, `kubectl`, `crictl`, `fail2ban`, `rkhunter`) are listed **only when they are installed**. A plain web server has no Docker and never will, so telling it to `dnf install docker-ce` every morning — or to install `kubectl` — is advice that can only ever be noise. Required tools (`mpstat`, `ss`, `postfix`) still show their install command, because those genuinely reduce coverage of checks the host *is* running.
 
 ---
 
@@ -291,10 +307,78 @@ list_local_ports = false
 # Extra path patterns to skip in the /etc scan (comma-separated shell globs).
 # For backup agents that write timestamped files into /etc.
 etc_ignore = /etc/CommVaultRegistryBackups/*
+
+# Extra mount globs to skip in the disk check, ON TOP OF a built-in list that
+# already covers kubelet, containerd, docker and snap. Usually left empty.
+disk_ignore =
+
+# Explicit kubeconfig. Blank auto-discovers rke2, k3s, kubeadm and ~/.kube.
+kubeconfig =
 ```
 
 Patterns are shell-quoted before reaching `find`, so a space or a semicolon in
 one stays part of the pattern instead of becoming a separate command.
+
+### Why `disk_ignore` has built-in defaults
+
+A Kubernetes node is not forty disks. Two things happen on one:
+
+- Every pod gets a 64 MB `shm` tmpfs under
+  `/run/k3s/containerd/.../sandboxes/<id>/shm`. Always 0% used, and it gets a
+  new identity every time the pod restarts, so the day-over-day delta churned
+  forever. These slipped through the old filter because it matches the *device*
+  column against `tmpfs`, and a sandbox shm mount's device is literally `shm`.
+- Worse, a pod's `subPath` mounts and its `local-path` PVCs are **bind mounts of
+  the root filesystem**, so `df` reports each one with `/dev/sda1` and the
+  root's numbers. Forty such pods meant forty identical rows — and, the moment
+  `/` crossed 90%, forty identical CAUTION alerts, each with its own
+  fingerprint in the de-duplication state.
+
+So the disk check does two things: it skips a built-in list of container-runtime
+mount globs (`disk_ignore` **adds** to that list rather than replacing it), and
+it then keeps only one row per distinct `(device, size, used, free)` — the
+shortest mount point, so `/` always wins. Anything hidden that way is summarised
+in a single `Hidden Mounts` row. The trailing `/*` in each glob is deliberate:
+`/var/lib/docker/*` skips the per-container mounts while a *dedicated
+filesystem* mounted at `/var/lib/docker` is still reported.
+
+### Kubernetes options
+
+```ini
+[kubernetes]
+# auto    — the whole cluster, plus a per-node pod summary on a multi-node
+#           cluster so the same crash loop is not emailed once per node
+# cluster — always the whole cluster
+# node    — only the pods scheduled on this host
+# off     — no Kubernetes section at all
+scope = auto
+
+# Individual signals, so one noisy source can be silenced without losing
+# the rest of the section.
+nodes  = true
+pods   = true
+pvcs   = true
+events = true
+images = true
+
+# Images churn on every deploy, so the default is a count only.
+list_images = false
+```
+
+The section appears only when the host has **both** a `kubectl` and a readable
+kubeconfig — a `kubectl` that cannot reach a cluster has nothing to say.
+Discovery checks `$KUBECONFIG`, `/etc/rancher/rke2/rke2.yaml`,
+`/etc/rancher/k3s/k3s.yaml`, `/etc/kubernetes/admin.conf` and `~/.kube/config`,
+and finds the binary by absolute path as well as `$PATH`. That last part
+matters: the cron entry runs with `PATH=/usr/bin:/bin` and reads no login
+profile, so the `export PATH=/var/lib/rancher/rke2/bin:$PATH` that makes
+`kubectl` work in your shell does not exist during the nightly run.
+
+One number is deliberately **not** reported: a "warning events in the last 24
+hours" count. The API server's `--event-ttl` defaults to **one hour** and both
+k3s and RKE2 ship that default, so a 24-hour window is unobtainable — and a row
+claiming one would make a cluster look quiet 90 minutes after an incident. The
+row labels the window from the oldest event actually returned instead.
 
 ---
 
@@ -307,8 +391,14 @@ port = 25
 use_tls = false
 username =                          # leave blank if no authentication required
 password =
-from = healthcheck@domain.com
+#from = healthcheck@domain.com      # commented out: defaults to healthcheck@<FQDN>
 ```
+
+`from` ships commented out on purpose. Left alone it becomes
+`healthcheck@<this host's FQDN>`, which is right on almost every host — whereas
+setting it in the example meant `install.sh`'s `MAIL_DOMAIN` substitution
+rewrote it into a sender that had nothing to do with the sending machine.
+Uncomment it only when the relay demands a fixed address.
 
 ## Thresholds (defaults)
 
@@ -323,6 +413,9 @@ from = healthcheck@domain.com
 | Pending updates | off | — |
 | Pending security updates | off | — |
 | fail2ban banned IPs | off | — |
+| Pod Pending / ContainerCreating | 15 min | — |
+| Pod restarts **gained since the last run** | 3 | — |
+| Evicted pod, newer than | 24 h | — |
 
 All thresholds are configurable in `healthcheck.conf` under `[thresholds]`.
 The ones marked *off* are reported as INFO until you give them a number — they
@@ -379,6 +472,44 @@ Note for contributors: `ruff` deliberately does **not** enable the `UP`
 (pyupgrade) rules, and no `python_version` is pinned for mypy. The runtime code
 must stay parseable by the Python 3.6 on the RHEL 7 targets — no walrus, no
 dataclasses, no `match`.
+
+---
+
+## Releases
+
+Cutting a release is not a manual checklist any more. **Merging to `main`
+releases.**
+
+`.github/workflows/01-check.yml` runs tests, lint, types and `make deploy-check`
+on every pull request. `.github/workflows/02-tag.yml` runs on a push to `main`,
+calls that same check workflow as its gate, and only then:
+
+1. derives the next version from the commit messages —
+   `feat:` → minor, a `!:` breaking marker → major, anything else → patch;
+2. runs `scripts/set-version.sh`, which writes the version into `hc/utils.py`,
+   `pyproject.toml` and `install.sh` and refreshes `uv.lock`;
+3. commits that to `main`, tags **the commit it just made**, and creates the
+   GitHub release.
+
+The order in step 3 is the point: tagging after the rewrite is what guarantees
+the release tarball contains a matching `VERSION` and a `DEFAULT_TAG` pointing
+at the very tag being cut. The bot's own commit is pushed with the default
+`GITHUB_TOKEN`, which does not trigger workflows, so it cannot re-fire the
+release.
+
+To move the version by hand — you rarely should — use the same script:
+
+```bash
+scripts/set-version.sh 2.1.0
+```
+
+`tests/test_version_consistency.py` fails the build if the four files ever
+disagree. It exists because they did: `pyproject.toml` said `2.0.3` while
+`uv.lock` still said `2.0.0`.
+
+> **Repo setting to check once:** if `main` is a protected branch, the
+> `github-actions[bot]` push in step 3 is rejected and the workflow fails after
+> the tests pass. Allow it to bypass the rule, or give the workflow a PAT.
 
 ---
 

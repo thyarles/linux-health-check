@@ -189,6 +189,33 @@ def load_config() -> configparser.ConfigParser:
             # Extra path patterns to skip in the /etc scan (comma separated).
             # Backup agents that write timestamped files into /etc belong here.
             "etc_ignore": "/etc/CommVaultRegistryBackups/*",
+            # Extra mount globs to skip in the disk check, ON TOP OF the
+            # built-in container-runtime list. Kubernetes bind-mounts a pod's
+            # subPaths and local-path PVCs off the root filesystem and df
+            # reports each one with the ROOT device's numbers, so one node at
+            # 91% used to emit forty identical rows and forty identical alerts.
+            "disk_ignore": "",
+            # Explicit kubeconfig. Blank auto-discovers rke2, k3s, kubeadm and
+            # ~/.kube/config.
+            "kubeconfig": "",
+        },
+        "kubernetes": {
+            # auto    — cluster-wide, plus a per-node pod summary on a
+            #           multi-node cluster
+            # cluster — always the whole cluster
+            # node    — only pods scheduled on this host
+            # off     — no Kubernetes section at all
+            "scope":  "auto",
+            # Individual signals, so a noisy one can be silenced without
+            # losing the rest.
+            "nodes":  "true",
+            "pods":   "true",
+            "pvcs":   "true",
+            "events": "true",
+            "images": "true",
+            # Images are inventory and churn on every deploy, so the default is
+            # a count. Set true to list the largest ones.
+            "list_images": "false",
         },
         "thresholds": {
             "cpu_caution":         "80",
@@ -214,6 +241,17 @@ def load_config() -> configparser.ConfigParser:
             # Docker: exited-non-zero containers within this window are fresh
             # failures; anything older is treated as intentionally stopped.
             "docker_recent_hours": "24",
+            # A pod Pending or ContainerCreating for less than this is the
+            # scheduler working, not a problem.
+            "k8s_pending_minutes": "15",
+            # A restart COUNT is meaningless — 200 days up with 5 restarts is a
+            # healthy pod. The growth since the previous run is the signal.
+            "k8s_restart_delta_caution": "3",
+            # Evicted pod objects persist until GC. An eviction from last month
+            # is not today's news.
+            "k8s_evicted_recent_hours": "24",
+            # Guard rail so a very large cluster cannot stall the run.
+            "k8s_max_pods": "2000",
         },
         "crontab": {
             "time": "07:00",
