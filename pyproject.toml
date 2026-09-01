@@ -15,7 +15,7 @@
 
 [project]
 name = "linux-health-check"
-version = "2.0.3"
+version = "2.1.0"
 description = "Linux server health and security monitoring — stdlib only at runtime"
 # 3.8 is the floor the DEV toolchain (pytest/mypy/ruff) supports. The runtime
 # code is deliberately kept compatible further back for RHEL 7 (python 3.6):

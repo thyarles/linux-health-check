@@ -25,7 +25,7 @@ REPO_SLUG="${REPO_SLUG:-thyarles/linux-health-check}"
 # "latest" means. Deliberately pinned rather than resolved from the GitHub API:
 # that API allows 60 unauthenticated calls/hour per IP, which a shared office
 # NAT exhausts, and the install then fails for everyone behind it.
-DEFAULT_TAG="v2.0.3"
+DEFAULT_TAG="v2.1.0"
 REPO_TAG="${REPO_TAG:-${1:-$DEFAULT_TAG}}"
 APP_DIR="${APP_DIR:-/root/linux-health-check}"
 MAIL_DOMAIN="${MAIL_DOMAIN:-mpt.mp.br}"
