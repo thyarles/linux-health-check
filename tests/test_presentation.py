@@ -90,10 +90,18 @@ def test_a_long_hostname_keeps_the_part_that_identifies_the_machine(renderer,
     assert "srv0123456789" in out
 
 
+@pytest.fixture
+def short_hostname(monkeypatch):
+    """Same reasoning as long_hostname: pin it. A test about hostname length
+    must not read the length of whatever machine it runs on."""
+    import hc.report
+    monkeypatch.setattr(hc.report.socket, "getfqdn", lambda: "web01.example.com")
+
+
 @pytest.mark.parametrize("renderer", [generate_text, generate_plain])
-def test_a_short_hostname_is_never_truncated(renderer):
+def test_a_short_hostname_is_never_truncated(renderer, short_hostname):
     out = renderer([sec("Docker", ("a", "1", OK))], OK)
-    assert "…" not in out.splitlines()[0] + out.splitlines()[1]
+    assert "web01.example.com" in out
 
 
 def test_flagged_rows_wrap_their_value_in_full():
