@@ -670,7 +670,7 @@ def _k8s_nodes(kc: str) -> tuple:
             "cordoned":  parts[1].strip().lower() == "true",
             "version":   parts[2],
             "conditions": conds,
-            "addresses": set(a for a in parts[4].split(",") if a),
+            "addresses": {a for a in parts[4].split(",") if a},
         })
     return nodes, ""
 
@@ -686,13 +686,13 @@ def _this_node(nodes: list) -> dict:
     names = {fqdn, fqdn.split(".")[0], socket.gethostname().lower()}
     for n in nodes:
         if n["name"].lower() in names:
-            return n
+            return dict(n)
     _, out, _ = run("hostname -I 2>/dev/null", timeout=10)
     mine = set(out.split())
     if mine:
         for n in nodes:
             if mine & n["addresses"]:
-                return n
+                return dict(n)
     return {}
 
 
@@ -772,7 +772,9 @@ def check_kubernetes(cfg: configparser.ConfigParser) -> Section:
 
 def _k8s_node_rows(s: Section, nodes: list, me: dict) -> None:
     prev_cordoned = set(load_state("k8s_cordoned") or [])
-    cordoned, pressures, not_ready = [], [], []
+    cordoned: list = []
+    pressures: list = []
+    not_ready: list = []
 
     for n in nodes:
         is_me  = bool(me) and n["name"] == me["name"]
