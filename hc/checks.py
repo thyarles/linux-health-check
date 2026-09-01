@@ -631,14 +631,17 @@ _K8S_UNREACHABLE = ("refused", "no such host", "i/o timeout", "timeout",
 _K8S_DENIED      = ("forbidden", "unauthorized", "you must be logged in",
                     "certificate has expired", "x509", "invalid bearer token")
 
+# Double quotes inside, single quotes outside — kubectl's own documented idiom.
+# A literal {'|'} would close the shell's single quote and turn the separator
+# into a pipe, which is exactly what it did the first time this ran.
 _NODES_JSONPATH = (
-    "{range .items[*]}"
-    "{.metadata.name}{'|'}"
-    "{.spec.unschedulable}{'|'}"
-    "{.status.nodeInfo.kubeletVersion}{'|'}"
-    "{range .status.conditions[*]}{.type}{'='}{.status}{','}{end}{'|'}"
-    "{range .status.addresses[*]}{.address}{','}{end}"
-    "{'\\n'}{end}"
+    '{range .items[*]}'
+    '{.metadata.name}{"|"}'
+    '{.spec.unschedulable}{"|"}'
+    '{.status.nodeInfo.kubeletVersion}{"|"}'
+    '{range .status.conditions[*]}{.type}{"="}{.status}{","}{end}{"|"}'
+    '{range .status.addresses[*]}{.address}{","}{end}'
+    '{"\\n"}{end}'
 )
 
 
