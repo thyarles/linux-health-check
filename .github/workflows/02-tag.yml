@@ -1,0 +1,119 @@
+name: 02 - Tag
+
+# Every merge to main cuts a release. That is deliberate: install.sh's
+# DEFAULT_TAG is what a bare `curl ... | bash` installs, and it is always
+# fetched from main — so main and the newest tag have to agree or servers get a
+# tag that does not exist.
+#
+# The version comes from the commit messages (conventional commits):
+#   feat: ...        -> minor
+#   anything!: ...   -> major
+#   everything else  -> patch
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    uses: ./.github/workflows/01-check.yml
+
+  tag:
+    name: Tag release
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc  # v6.4.3
+
+      - name: Version
+        id: version
+        uses: paulhatch/semantic-version@a8f8f59fd7f0625188492e945240f12d7ad2dca3  # v5.4.0
+        with:
+          tag_prefix: "v"
+          bump_each_commit: false
+          # The action's defaults look for literal "(MAJOR)"/"(MINOR)" markers,
+          # which this repo has never used — every merge would be a patch.
+          # These read the conventional-commit prefixes it actually writes.
+          major_pattern: '/^\w+(\(.+\))?!:/'
+          minor_pattern: '/^feat(\(.+\))?:/'
+          version_format: "${major}.${minor}.${patch}"
+
+      - name: Create tag and release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.version_tag }}
+          PREV_TAG: v${{ steps.version.outputs.previous_version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          DATE="$(date -u +'%Y-%m-%d')"
+
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "Tag $TAG already exists. Skipping."
+            exit 0
+          fi
+
+          if git rev-parse -q --verify "refs/tags/$PREV_TAG" >/dev/null; then
+            RANGE="${PREV_TAG}..HEAD"
+            GH_ARGS=(-f "previous_tag_name=$PREV_TAG")
+          else
+            RANGE="$(git rev-list --max-parents=0 HEAD)..HEAD"
+            GH_ARGS=()
+          fi
+
+          COMMITS=$(git log --pretty='- %h %s (%an)' $RANGE || true)
+          [ -z "$COMMITS" ] && COMMITS="(No relevant commits since ${PREV_TAG:-initial})"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Write the version into the files BEFORE tagging, so the release
+          # tarball carries a matching hc/utils.py VERSION and a DEFAULT_TAG
+          # that points at the very tag being cut. That property is the whole
+          # reason this step exists.
+          scripts/set-version.sh "$VERSION"
+          if ! git diff --quiet; then
+            git add hc/utils.py pyproject.toml install.sh uv.lock
+            # A push authenticated with GITHUB_TOKEN does not trigger
+            # workflows, so this commit cannot re-fire the release. [skip ci]
+            # is belt-and-braces for anyone who swaps in a PAT later.
+            git commit -m "chore(release): ${TAG} [skip ci]"
+            git push origin HEAD:main
+          fi
+
+          {
+            echo "Release ${TAG} (${DATE})"
+            echo
+            echo "### Changes"
+            echo "$COMMITS"
+          } > TAG_BODY.txt
+
+          git tag -a "$TAG" -F TAG_BODY.txt
+          git push origin "$TAG"
+
+          AUTO_NOTES=$(gh api \
+            -X POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$TAG" \
+            "${GH_ARGS[@]}" \
+            -f target_commitish="main" \
+            --jq '.body')
+
+          {
+            echo "# Release ${TAG} (${DATE})"
+            echo "$COMMITS"
+            echo
+            echo "$AUTO_NOTES"
+          } > TAG_BODY.txt
+
+          gh release create "$TAG" --target main --title "${TAG}" --notes-file TAG_BODY.txt
+          rm -f TAG_BODY.txt
