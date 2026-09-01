@@ -57,12 +57,43 @@ LONG_LABEL = "k8s_POD_helm-install-traefik-crd-wzsss_kube-system_429d29a9-55c3-4
 LONG_VALUE = "Exited (0) About an hour ago  [rancher/mirrored-pause:3.6-with-a-very-long-tag]"
 
 
+# A hostname long enough to blow the width on its own. Cloud FQDNs really do
+# look like this — the CI runner that first caught the header overflow was
+# `runnervmgx7h7.llrwocqjdogehnr5ig5nnjbyxf.xx.internal.cloudapp.net`.
+LONG_HOST = "srv0123456789.subdomain-that-goes-on.internal.example.cloudapp.net"
+
+
+@pytest.fixture
+def long_hostname(monkeypatch):
+    """Pin the hostname so the width tests measure the renderer, not the
+    machine they happen to run on. Without this the suite passed on a laptop
+    called 'pgtdt65297' and failed on a CI runner, which is the least useful
+    way to find out."""
+    import hc.report
+    monkeypatch.setattr(hc.report.socket, "getfqdn", lambda: LONG_HOST)
+
+
 @pytest.mark.parametrize("renderer", [generate_text, generate_plain])
-def test_no_line_exceeds_the_declared_width(renderer):
+def test_no_line_exceeds_the_declared_width(renderer, long_hostname):
     """The old renderer claimed 76 columns and emitted 155."""
     s = sec("Docker", (LONG_LABEL, LONG_VALUE, INFO), ("short", "value", OK))
     for line in renderer([s], INFO).splitlines():
         assert len(line) <= W, f"{len(line)} cols: {line!r}"
+
+
+@pytest.mark.parametrize("renderer", [generate_text, generate_plain])
+def test_a_long_hostname_keeps_the_part_that_identifies_the_machine(renderer,
+                                                                    long_hostname):
+    """Truncation drops the domain tail, not the leading label — 'srv0123456789'
+    is the half that tells you which server you are reading about."""
+    out = renderer([sec("Docker", ("a", "1", OK))], OK)
+    assert "srv0123456789" in out
+
+
+@pytest.mark.parametrize("renderer", [generate_text, generate_plain])
+def test_a_short_hostname_is_never_truncated(renderer):
+    out = renderer([sec("Docker", ("a", "1", OK))], OK)
+    assert "…" not in out.splitlines()[0] + out.splitlines()[1]
 
 
 def test_flagged_rows_wrap_their_value_in_full():
