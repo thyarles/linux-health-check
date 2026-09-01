@@ -50,14 +50,24 @@ def host_label() -> str:
     saved report files were indistinguishable and their alerts looked like one
     host flapping.
 
-    The kernel's own hostname is the machine's identity. The resolved FQDN is
-    used only when it agrees with that name — when all it does is add a domain.
+    Worse, getfqdn() is not even stable: it reverse-resolves, so on a node that
+    sometimes holds a floating VIP the answer changes with the VIP. A host's
+    identity must not drift.
+
+    So the kernel's own hostname wins, and it is usually already qualified
+    (`hostname` printing mpt-kpm03.mpt.mp.br). getfqdn() is consulted for one
+    narrow purpose — supplying a domain the kernel name lacks — and only when
+    it is talking about the same machine. That also avoids adopting getfqdn()'s
+    casing, which resolvers are free to mangle: it answers MPT-KPM03.mpt.mp.br
+    on a host whose own name is lowercase.
     """
     if _HOST_OVERRIDE:
         return _HOST_OVERRIDE
     name = socket.gethostname()
+    if "." in name:
+        return name
     fqdn = socket.getfqdn()
-    if name and fqdn and fqdn.split(".")[0].lower() == name.split(".")[0].lower():
+    if name and fqdn and fqdn.split(".")[0].lower() == name.lower():
         return fqdn
     return name or fqdn
 

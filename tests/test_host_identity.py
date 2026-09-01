@@ -1,11 +1,17 @@
 """Which name a host calls itself.
 
 Written from a real incident: three RKE2 nodes (mpt-kpm01/02/03) sit behind the
-shared name rancher-mgmt.mpt.mp.br. `socket.getfqdn()` resolves the kernel
-hostname through /etc/hosts and DNS and returns the *first* name it finds, so
-all three reported themselves as `rancher-mgmt.mpt.mp.br` — identical headers,
-identical subject lines, colliding report filenames, and three machines' alerts
-looking like one host flapping.
+shared name rancher-mgmt.mpt.mp.br. `socket.getfqdn()` reverse-resolves the
+kernel hostname and returns the *first* name it finds, which on those nodes came
+back as `rancher-mgmt.mpt.mp.br` — identical report headers, identical subject
+lines, colliding report filenames, and three machines' alerts reading as one
+host flapping.
+
+It is also not stable. Asked again on mpt-kpm03 it answered
+`MPT-KPM03.mpt.mp.br`, upper-cased, on a host whose own name is lowercase. A
+resolver's answer depends on which node currently holds the VIP, on DNS, and on
+cache state; an identity that drifts with any of those is worse than a wrong
+one, because the same machine reports under different names on different days.
 """
 
 import pytest
@@ -51,14 +57,33 @@ def test_a_matching_fqdn_is_kept_because_it_only_adds_a_domain(monkeypatch):
 
 
 def test_the_match_is_case_insensitive(monkeypatch):
-    """Windows-ish DNS and some resolvers upper-case the name."""
+    """Resolvers are free to mangle case; a bare kernel name still gets its
+    domain from a differently-cased FQDN for the same machine."""
     _names(monkeypatch, "web01", "WEB01.example.com")
     assert host_label() == "WEB01.example.com"
 
 
-def test_a_fully_qualified_kernel_hostname_matches_its_own_fqdn(monkeypatch):
-    _names(monkeypatch, "web01.example.com", "web01.example.com")
-    assert host_label() == "web01.example.com"
+def test_an_already_qualified_kernel_name_is_used_verbatim(monkeypatch):
+    """Real output from mpt-kpm03: `hostname` is already fully qualified and
+    getfqdn() answers with the same name UPPER-CASED. The kernel's spelling is
+    the one the operator sees, so nothing is borrowed from the resolver."""
+    _names(monkeypatch, "mpt-kpm03.mpt.mp.br", "MPT-KPM03.mpt.mp.br")
+    assert host_label() == "mpt-kpm03.mpt.mp.br"
+
+
+def test_a_qualified_kernel_name_ignores_the_resolver_entirely(monkeypatch):
+    """getfqdn() reverse-resolves, so on a node that sometimes holds a floating
+    VIP its answer changes with the VIP. An identity that drifts is useless, so
+    a qualified kernel name never consults it."""
+    _names(monkeypatch, "mpt-kpm03.mpt.mp.br", "rancher-mgmt.mpt.mp.br")
+    assert host_label() == "mpt-kpm03.mpt.mp.br"
+
+
+def test_the_same_host_reports_the_same_name_whoever_holds_the_vip(monkeypatch):
+    _names(monkeypatch, "mpt-kpm03.mpt.mp.br", "rancher-mgmt.mpt.mp.br")
+    holding_vip = host_label()
+    _names(monkeypatch, "mpt-kpm03.mpt.mp.br", "MPT-KPM03.mpt.mp.br")
+    assert host_label() == holding_vip
 
 
 def test_an_unresolvable_host_falls_back_to_the_kernel_name(monkeypatch):
