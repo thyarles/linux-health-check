@@ -622,9 +622,12 @@ _K8S_SERIOUS_EVENTS = frozenset((
     "FailedAttachVolume",
 ))
 
-_K8S_UNREACHABLE = ("connection refused", "no such host", "i/o timeout", "timeout",
+# kubectl's own wording, not errno strings: a refused connection reads "The
+# connection to the server 127.0.0.1:6443 was refused - did you specify the
+# right host or port?", which matches none of the obvious phrases.
+_K8S_UNREACHABLE = ("refused", "no such host", "i/o timeout", "timeout",
                     "unable to connect to the server", "network is unreachable",
-                    "tls handshake", "eof")
+                    "did you specify the right host", "tls handshake", "eof")
 _K8S_DENIED      = ("forbidden", "unauthorized", "you must be logged in",
                     "certificate has expired", "x509", "invalid bearer token")
 

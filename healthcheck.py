@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
-Linux Health Check — v2.0
+Linux Health Check
+
+The version lives in hc/utils.py (VERSION) and is set by the release workflow —
+it is deliberately not repeated here, where it only ever went stale.
 
 Usage:
   healthcheck.py [run]             Run all checks and send emails (default)

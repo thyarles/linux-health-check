@@ -1,4 +1,4 @@
-# healthcheck.conf — Linux Health Check v2.0
+# healthcheck.conf — Linux Health Check
 # =============================================================
 # Copy this file to healthcheck.conf in the same directory as
 # healthcheck.py and edit the values below for this server.
