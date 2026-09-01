@@ -1,9 +1,8 @@
 import datetime
 import html as _htmllib
-import socket
 
 from .models import OK, INFO, CAUTION, UNHEALTHY, Section, _RANK
-from .utils  import VERSION
+from .utils  import VERSION, host_label
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -281,7 +280,7 @@ _LIGHT_LOCK = """
 
 def generate_html(sections: list, overall: str, decision=None) -> str:
     now      = _now()
-    hostname = socket.getfqdn()
+    hostname = host_label()
     ov       = _c(overall)
     ordered  = order_sections(sections)
 
@@ -471,7 +470,7 @@ def _fit_host(template: str, host: str, width: int = W) -> str:
 
 def generate_plain(sections: list, overall: str, decision=None) -> str:
     """Compact plain text — used for the email body."""
-    hostname = socket.getfqdn()
+    hostname = host_label()
     ordered  = order_sections(sections)
     lines    = [
         _fit_host(f"Linux Health Check v{VERSION} — {{host}} — {_now()}", hostname),
@@ -497,7 +496,7 @@ def generate_plain(sections: list, overall: str, decision=None) -> str:
 
 def generate_text(sections: list, overall: str, decision=None) -> str:
     """Human-readable terminal report with status symbols and aligned columns."""
-    hostname = socket.getfqdn()
+    hostname = host_label()
     ov       = _c(overall)
     ordered  = order_sections(sections)
 

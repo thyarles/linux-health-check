@@ -7,6 +7,23 @@
 # appropriate email recipients for that environment.
 # =============================================================
 
+[general]
+# The name this host calls itself in the report header, the email subject and
+# the saved report filenames.
+#
+# Leave it blank and the kernel hostname is used (`hostname` on the command
+# line). The script deliberately does NOT trust socket.getfqdn(): that resolves
+# the machine's name through /etc/hosts and DNS and returns the FIRST name it
+# finds, which on a clustered host is routinely a shared VIP. Three RKE2 nodes
+# behind rancher-mgmt.example.com each called themselves rancher-mgmt, so their
+# reports were indistinguishable and three machines' alerts looked like one
+# host flapping.
+#
+# Set it only if you want something other than the kernel hostname — a fully
+# qualified name, say, or a role label.
+hostname =
+
+
 [smtp]
 # SMTP relay host.
 # Leave blank to use localhost (Postfix must be running and able to relay).

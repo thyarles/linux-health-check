@@ -382,6 +382,40 @@ row labels the window from the oldest event actually returned instead.
 
 ---
 
+## Host Identity
+
+```ini
+[general]
+hostname =        # blank = the kernel hostname (`hostname` on the command line)
+```
+
+The report header, the email subject and the saved report filenames all name the
+host. That name comes from the **kernel hostname**, not `socket.getfqdn()`.
+
+`getfqdn()` takes the kernel hostname, resolves it through `/etc/hosts` and DNS,
+and returns the *first* name it finds — which on a clustered host is routinely a
+shared VIP rather than the machine. Three RKE2 nodes behind
+`rancher-mgmt.example.com` each reported themselves as `rancher-mgmt.example.com`:
+identical headers, identical subject lines, colliding report filenames, and three
+machines' alerts arriving as though one host were flapping.
+
+The resolved FQDN is used only when it **agrees** with the kernel hostname — when
+all it does is add a domain, so `web01` + `web01.example.com` still renders the
+fully qualified name. When they disagree, the report says so explicitly in
+System Information:
+
+```
+Hostname        mpt-kpm03
+Resolved name   rancher-mgmt.mpt.mp.br  (shared/VIP name — not used as this host's identity)
+```
+
+Set `hostname` only if you want something other than the kernel name. The
+default `From:` address follows the same identity, borrowing the domain from the
+resolved name when the kernel one is bare — so `mpt-kpm03` on
+`rancher-mgmt.mpt.mp.br` sends as `healthcheck@mpt-kpm03.mpt.mp.br`.
+
+---
+
 ## SMTP Configuration
 
 ```ini
