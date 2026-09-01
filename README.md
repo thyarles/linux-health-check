@@ -88,10 +88,17 @@ installed tag is recorded in `.installed-version`.
 | `MAIL_DOMAIN` | `mpt.mp.br` | Replaces `domain.com` in the generated config |
 | `CRON_TIME` | `07:00` | Daily run time |
 | `REPO_SLUG` | `thyarles/linux-health-check` | Source repo |
+| `DOWNLOADER` | auto | Force `curl` or `wget` when the other is broken |
 
 Needs `curl` or `wget` and `tar` — no `git`, and no GitHub API. Tags before
 `v2.0.1` hardcode `/usr/bin/python3` and will be rejected by the verification
 step.
+
+On very old hosts curl may exist but be unusable: builds that offer only TLS 1.0
+fail against GitHub with `curl: (35) Peer reports incompatible or unsupported
+protocol version`. The installer treats a curl failure as a reason to retry with
+wget rather than to abort, so those hosts install unattended. `DOWNLOADER=wget`
+skips curl entirely.
 
 ---
 
