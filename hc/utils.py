@@ -12,6 +12,10 @@ SCRIPT_DIR  = SCRIPT_PATH.parent
 STATE_DIR   = SCRIPT_DIR / "state"
 REPORT_DIR  = SCRIPT_DIR / "reports"
 CONFIG_PATH = SCRIPT_DIR / "healthcheck.conf"
+# Shipped defaults, replaced wholesale by every upgrade. Read BEFORE
+# healthcheck.conf so a setting added in a new release arrives with a working
+# value without anyone editing the operator's file — see load_config().
+BASE_PATH   = SCRIPT_DIR / "healthcheck.conf.base"
 
 
 def run(cmd: str, timeout: int = 30) -> tuple:
@@ -201,9 +205,16 @@ def count_in_log_today(sources: str, grep_pattern: str) -> tuple:
     return len(lines), lines[-3:]
 
 
-def load_config() -> configparser.ConfigParser:
-    cfg = configparser.ConfigParser()
-    cfg.read_dict({
+def builtin_defaults() -> dict:
+    """The floor under everything, in code.
+
+    healthcheck.conf.base ships the same values with the documentation attached
+    and overrides this, so in a normal install these are never the answer. They
+    exist so that the program still runs — and every test still has a complete
+    config — when the base file is missing, which is what a hand-copied install
+    of just healthcheck.py and hc/ produces. A test keeps the two in step.
+    """
+    return {
         "general": {
             # Overrides the name this host calls itself in reports, subject
             # lines and saved report files. Blank uses the kernel hostname —
@@ -230,8 +241,12 @@ def load_config() -> configparser.ConfigParser:
             "html_mode": "inline",
         },
         "alerts": {
-            # Minimum severity that notifies alert_recipients: caution | unhealthy
-            "notify_all_on":          "caution",
+            # Minimum severity that notifies alert_recipients: caution | unhealthy.
+            # This said "caution" in code and "unhealthy" in the shipped
+            # config for three releases, so what a host did depended on
+            # whether anyone had copied the file. unhealthy is what the
+            # installed fleet is actually running.
+            "notify_all_on":          "unhealthy",
             # Re-notify about a condition that is still open after N hours.
             # 0 disables the reminder entirely (notify once, on first sight).
             "remind_caution_hours":   "168",   # 7 days
@@ -314,10 +329,45 @@ def load_config() -> configparser.ConfigParser:
         },
         "crontab": {
             "time": "07:00",
+            # Whole fleets install the same cron time, so at 07:00 every host
+            # starts a full scan at once — often on top of the backup window,
+            # which the check then reports as the CPU spike it caused itself.
+            # The entry still fires on the hour; the run waits a random slice
+            # of the window below before touching anything. A run started by
+            # hand is never delayed.
+            "random":        "true",
+            # 4h, 90m, 2h30m — or a bare number, read as hours.
+            "random_window": "4h",
         },
-    })
-    if CONFIG_PATH.exists():
-        cfg.read(str(CONFIG_PATH))
+    }
+
+
+# The layers, weakest first. Each one only has to say what it changes.
+LAYERS = ("default", "base", "conf")
+
+
+def config_layers() -> list:
+    """(name, path) for the file-backed layers, in the order they are read."""
+    return [("base", BASE_PATH), ("conf", CONFIG_PATH)]
+
+
+def load_config() -> configparser.ConfigParser:
+    """Effective config: built-in defaults < healthcheck.conf.base < healthcheck.conf.
+
+    Merged rather than chosen. healthcheck.conf holds only what this host wants
+    to be different, so an upgrade that adds a setting delivers it through the
+    base file — no migration step, and the operator's own file is never
+    rewritten to keep up.
+
+    A key present in healthcheck.conf wins even when its value is empty:
+    `daily_recipients =` is a deliberate "nobody", not an omission, and the
+    base layer must not put its own value back.
+    """
+    cfg = configparser.ConfigParser()
+    cfg.read_dict(builtin_defaults())
+    for _, path in config_layers():
+        if path.exists():
+            cfg.read(str(path))
     global _HOST_OVERRIDE
     _HOST_OVERRIDE = cfg.get("general", "hostname", fallback="").strip()
     return cfg

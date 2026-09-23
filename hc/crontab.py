@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 
+from . import schedule
 from .utils import run, load_config, SCRIPT_PATH
 
 
@@ -43,7 +44,13 @@ def install_crontab(time_str: str = "") -> None:
     hour, minute = m.group(1).zfill(2), m.group(2)
     py3  = resolve_python(cfg)
     tag  = "# linux-healthcheck-managed"
-    line = f"{minute} {hour} * * * {py3} {SCRIPT_PATH} run >> /var/log/healthcheck.log 2>&1  {tag}"
+    # --scheduled marks the unattended run, and is what lets that run honour
+    # the random delay while `healthcheck.py run` typed at a prompt stays
+    # immediate. The flag only says "this came from cron"; whether it waits at
+    # all, and for how long, is read from the config AT RUN TIME — so changing
+    # [crontab] random does not require reinstalling the entry.
+    line = (f"{minute} {hour} * * * {py3} {SCRIPT_PATH} run --scheduled "
+            f">> /var/log/healthcheck.log 2>&1  {tag}")
 
     rc, current, _ = run("crontab -l 2>/dev/null || true")
     kept = [l for l in current.splitlines() if tag not in l]
@@ -54,7 +61,12 @@ def install_crontab(time_str: str = "") -> None:
         r = subprocess.run(["crontab", "-"], input=new_crontab,
                            capture_output=True, text=True)
         if r.returncode == 0:
-            print(f"  ✓ Crontab updated: runs daily at {hour}:{minute}")
+            if schedule.enabled(cfg):
+                window = schedule.fmt_duration(schedule.window_seconds(cfg))
+                print(f"  ✓ Crontab updated: fires daily at {hour}:{minute}, "
+                      f"then waits a random 0–{window} before running")
+            else:
+                print(f"  ✓ Crontab updated: runs daily at {hour}:{minute}")
             print(f"  Entry: {line}")
         else:
             sys.exit(f"  ✗ crontab update failed: {r.stderr}")

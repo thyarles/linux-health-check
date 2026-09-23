@@ -23,6 +23,20 @@ def store(monkeypatch) -> dict:
     return data
 
 
+@pytest.fixture
+def cfg(cfg):
+    """The shared config, with the alert threshold pinned to CAUTION.
+
+    Everything in this file is about the de-duplication state machine, and its
+    findings are CAUTION-level. The shipped default for notify_all_on is
+    `unhealthy`, so leaving the threshold implicit would make every assertion
+    here depend on a product decision it is not testing — and it did: these
+    tests all flipped the day that default was corrected.
+    """
+    cfg.set("alerts", "notify_all_on", "caution")
+    return cfg
+
+
 DAY0 = datetime.datetime(2026, 1, 5, 7, 0)
 
 

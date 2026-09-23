@@ -77,12 +77,31 @@ def tools(monkeypatch):
     return installed
 
 
+@pytest.fixture(autouse=True)
+def _reset_host_override():
+    """Undo load_config()'s write to hc.utils._HOST_OVERRIDE after every test.
+
+    It is a module global, so a test that loads a config naming a hostname
+    leaves that name set for whatever runs next — which reaches host_label(),
+    host_mail_domain(), the report header and the default From: address. That
+    produces a failure in an unrelated test that passes when run alone, and
+    the cost of preventing it is this.
+    """
+    import hc.utils
+    before = hc.utils._HOST_OVERRIDE
+    yield
+    hc.utils._HOST_OVERRIDE = before
+
+
 @pytest.fixture
 def cfg(monkeypatch) -> configparser.ConfigParser:
-    """Config built from the built-in defaults only.
+    """The config a freshly installed host runs on: defaults + the base layer.
 
-    CONFIG_PATH is pointed at a file that does not exist so that a developer's
-    own healthcheck.conf can never change a test result.
+    CONFIG_PATH is pointed at a file that does not exist, so a developer's own
+    healthcheck.conf can never change a test result. healthcheck.conf.base is
+    left alone deliberately — it is shipped code, tracked in git, and it is the
+    layer every real host actually reads, so tests that skipped it would be
+    asserting against values no installation has.
     """
     import hc.utils
     monkeypatch.setattr(hc.utils, "CONFIG_PATH", pathlib.Path("/nonexistent/healthcheck.conf"))

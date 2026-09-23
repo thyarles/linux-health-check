@@ -118,7 +118,10 @@ def test_makefile_deploy_list_covers_everything_the_runtime_needs():
     assert "hc" in listed, (
         "the hc/ package must be deployed — healthcheck.py cannot import itself"
     )
-    assert "healthcheck.conf.example" in listed
+    assert "healthcheck.conf.base" in listed, (
+        "the base config layer must be deployed — it is what supplies every "
+        "default an upgraded host has not overridden"
+    )
 
 
 def test_no_pip_installable_metadata_claims_dependencies():
