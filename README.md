@@ -21,7 +21,8 @@ whole thing in one command. See [Quick Install](#quick-install).
 |------|-------------|-----------------|
 | `healthcheck.py` | Entry point | yes |
 | `hc/` | The check, report, alert and mail modules | yes |
-| `healthcheck.conf.example` | Config template — copy to `healthcheck.conf` and edit | yes |
+| `healthcheck.conf.base` | Shipped defaults, read at runtime — replaced by every upgrade, never edited | yes |
+| `healthcheck.conf` | This host's overrides only — created on install, never touched by an upgrade | created on server |
 | `install.sh` | One-command installer: private Python + tagged release + cron | run on server |
 | `pyproject.toml`, `tests/`, `uv.lock`, `Makefile` | Dev toolchain only | **no** |
 | `.github/workflows/`, `scripts/set-version.sh` | CI and the release/version automation | **no** |
@@ -63,12 +64,17 @@ curl -fsSL https://raw.githubusercontent.com/thyarles/linux-health-check/main/in
 
 # any other tag
 curl -fsSL https://raw.githubusercontent.com/thyarles/linux-health-check/main/install.sh | bash -s -- v2.0.1
+
+# set values while installing or upgrading — repeatable, validated
+curl -fsSL https://raw.githubusercontent.com/thyarles/linux-health-check/main/install.sh | bash -s -- v2.2.0 \
+    --set crontab.time=06:30 --set email.daily_recipients=ops@example.com
 ```
 
 It installs Miniconda to `/root/miniconda3`, downloads the tagged release
-tarball to `/root/linux-health-check`, writes `healthcheck.conf` from the
-example, installs the cron entry, and then **verifies that the entry it just
-wrote actually points at the private interpreter** before reporting success.
+tarball to `/root/linux-health-check`, creates a starter `healthcheck.conf` if
+the host has none, installs the cron entry, and then **verifies that the entry
+it just wrote actually points at the private interpreter** before reporting
+success.
 
 With no tag argument it installs the release pinned as `DEFAULT_TAG` at the top
 of `install.sh`. Because `install.sh` is always fetched from `main`, that one
@@ -83,7 +89,9 @@ exceeded`. A pinned tag has no such failure mode.
 
 **Re-running it upgrades in place.** `healthcheck.conf`, `state/` and `reports/`
 are never in the release archive, so they survive untouched — your SMTP
-credentials and the change-detection baselines are safe. `hc/` is purged before
+credentials and the change-detection baselines are safe. Settings added by the
+new release arrive through `healthcheck.conf.base`, which IS replaced, so there
+is nothing to migrate — see [Configuration](#configuration-two-files-merged). `hc/` is purged before
 the new copy so a module deleted upstream cannot linger and get imported. The
 installed tag is recorded in `.installed-version`.
 
@@ -92,8 +100,8 @@ installed tag is recorded in `.installed-version`.
 | `REPO_TAG` | `DEFAULT_TAG` in `install.sh` | Version to install (or pass as the first argument) |
 | `APP_DIR` | `/root/linux-health-check` | Where the code lands |
 | `CONDA_PREFIX_DIR` | `/root/miniconda3` | Where the private Python lands |
-| `MAIL_DOMAIN` | `domain.com` | Replaces `domain.com` in the generated config |
-| `CRON_TIME` | `07:00` | Daily run time |
+| `MAIL_DOMAIN` | `domain.com` | Domain used for the relay host in a newly created config |
+| `CRON_TIME` | `00:07` | Daily run time — shorthand for `--set crontab.time=...`, and now persisted in `healthcheck.conf` |
 | `REPO_SLUG` | `thyarles/linux-health-check` | Source repo |
 | `DOWNLOADER` | auto | Force `curl` or `wget` when the other is broken |
 
@@ -118,23 +126,27 @@ the manual route still applies.
 # 1. Copy the runtime files to the server (healthcheck.py needs the hc/ package).
 #    `make deploy HOST=root@yourserver` does this same step for you.
 ssh root@yourserver mkdir -p /opt/healthcheck
-scp -r healthcheck.py hc healthcheck.conf.example \
+scp -r healthcheck.py hc healthcheck.conf.base \
     root@yourserver:/opt/healthcheck/
 
 # 2. Bootstrap: install dependencies and create directories
 cd /opt/healthcheck
 python3 healthcheck.py bootstrap
 
-# 3. Configure: set SMTP, email recipients, and thresholds
-cp healthcheck.conf.example healthcheck.conf
-nano healthcheck.conf
+# 3. Configure: create the overrides file and set the recipients
+python3 healthcheck.py config init
+python3 healthcheck.py config set email.daily_recipients=ops@example.com
+# ...or edit healthcheck.conf by hand. Every available setting is documented
+#    in healthcheck.conf.base; copy the ones you want to change.
 
 # 4. Preview the report before any email is sent
 python3 healthcheck.py report > /tmp/report.html
 # Open /tmp/report.html in a browser to review
 
-# 5. Install the daily cron job (default 07:00, or pass HH:MM)
-python3 healthcheck.py crontab 07:00
+# 5. Install the daily cron job (default 00:07, or pass HH:MM)
+#    The run starts at a random point in the 8h after this time — see
+#    "Random start delay" below, or set [crontab] random = false.
+python3 healthcheck.py crontab 00:07
 crontab -l | grep healthcheck   # verify
 ```
 
@@ -145,16 +157,133 @@ Log output from cron goes to `/var/log/healthcheck.log`.
 ## Modes
 
 ```
-python3 healthcheck.py [run]            Run checks + send emails (cron default)
+python3 healthcheck.py [run]            Run checks + send emails
+python3 healthcheck.py run --scheduled  Same, but honours the random start
+                                        delay — the form cron installs
 python3 healthcheck.py report           Print HTML to stdout, no emails
 python3 healthcheck.py text             Print text report to stdout, no emails
 python3 healthcheck.py bootstrap        Check/install system tools
 python3 healthcheck.py crontab [HH:MM]  Install/update crontab entry
+python3 healthcheck.py config show      Every effective setting and the layer
+                                        it came from (--diff: overrides only)
+python3 healthcheck.py config set K=V   Write an override, e.g.
+                                        config set crontab.time=06:30
+python3 healthcheck.py config init      Create the starter healthcheck.conf
+python3 healthcheck.py config prune     List settings that only restate the
+                                        defaults (--apply to remove them)
 ```
 
 `report` and `text` are read-only: they never send email and never touch the
 state snapshots, so previewing a report cannot consume the change-detection
 baselines the scheduled run depends on.
+
+### Random start delay
+
+Every host installs the same cron time, so at 00:07 a whole fleet begins a full
+scan at once — frequently on top of the backup window. The check then reports
+the CPU spike it caused itself, to people for whom 00:07 CPU is expected.
+
+With `[crontab] random` on (the default), cron still fires at `time` and the run
+waits a random slice of `random_window` before touching anything:
+
+```ini
+[crontab]
+time          = 00:07
+random        = true
+random_window = 8h      # 8h, 90m, 2h30m — a bare number means hours
+```
+
+`crontab -l` keeps showing one fixed, readable time; only the run moves, and the
+draw is fresh every night, so today's 00:12 host is not tomorrow's. The delay is
+logged the moment the job starts, so a waiting host is never mistaken for a hung
+one:
+
+```
+[2026-09-21 00:07:01] Random delay 2h37m of an 8h00m window — checks start at 02:44
+[2026-09-21 02:44:02] Running health checks on hst-exp03.domain.com...
+```
+
+Only the cron run waits — `healthcheck.py run` typed at a prompt starts
+immediately. Set `random = false` to always start on the hour.
+
+Keep `time` plus the window inside one calendar day. The log checks count only
+*today's* entries, so a run pushed past midnight reports on a day that is
+minutes old.
+
+### Configuration: two files, merged
+
+The config is a merge, not a single file:
+
+| Layer | File | Who owns it |
+|-------|------|-------------|
+| 1 (weakest) | built-in defaults in `hc/utils.py` | code — only reached if the base file is missing |
+| 2 | `healthcheck.conf.base` | **shipped**, replaced by every upgrade. Do not edit |
+| 3 (wins) | `healthcheck.conf` | **yours**, never touched by an upgrade |
+
+`healthcheck.conf` holds only what this host does differently. Everything it
+leaves out follows the base file — *including settings added by later
+releases*, which is what makes an upgrade a no-op for configuration:
+
+```console
+$ python3 healthcheck.py config show
+  [crontab]
+  * time                       06:30            healthcheck.conf     ← yours
+    random                     true             healthcheck.conf.base ← new in this release
+    random_window              8h               healthcheck.conf.base
+```
+
+`config show --diff` lists only your overrides — a one-screen answer to "what
+is different about this host?".
+
+An upgrade needs no migration step and rewrites nothing. The installer only
+replaces `healthcheck.conf.base`, and the new settings in it are simply read.
+
+### Setting values from the install line
+
+`--set` is repeatable and works on a fresh install and an upgrade alike:
+
+```bash
+curl -fsSL .../install.sh | bash -s -- v2.2.0 \
+    --set crontab.time=06:30 \
+    --set crontab.random_window=2h \
+    --set email.daily_recipients=ops@example.com
+```
+
+Same thing on a host that is already installed:
+
+```console
+$ python3 healthcheck.py config set crontab.time=06:30
+  ✓ crontab.time = 06:30
+  Written to healthcheck.conf; previous version kept as healthcheck.conf.bak
+```
+
+Keys are validated against the settings the release actually reads, so
+`crontab.tim=06:30` stops the install instead of becoming a line that silently
+does nothing. Your comments, ordering and every other value are preserved, and
+a typo in any one `--set` applies none of them.
+
+### Slimming a config from an older release
+
+A `healthcheck.conf` written before v2.2.0 is a full copy of the old example,
+so every default in it is **pinned at the version it was installed from** and no
+later improvement can reach that host. `config prune` reports those lines, and
+removes them with `--apply`:
+
+```console
+$ python3 healthcheck.py config prune
+  42 setting(s) in healthcheck.conf only restate healthcheck.conf.base:
+    - [smtp] port
+    - [alerts] remind_caution_hours
+    ...
+  Nothing written. These pin this host to the values it was installed with,
+  so a better default in a later release cannot reach it. Remove them with:
+      healthcheck.py config prune --apply
+```
+
+It never removes a value you changed, an empty override (`alert_recipients =`
+means *nobody*, deliberately), or a comment you wrote yourself. The effective
+configuration afterwards is identical — that is the point — and the previous
+file is kept as `healthcheck.conf.bak`.
 
 ### Which Python the cron entry runs
 
@@ -200,7 +329,7 @@ section's status in one screen.
 ```ini
 [alerts]
 # caution | unhealthy
-notify_all_on          = caution
+notify_all_on          = unhealthy
 # one nudge a week while a CAUTION stays open
 remind_caution_hours   = 168
 # UNHEALTHY is chased daily

@@ -51,7 +51,7 @@ def test_the_set_version_script_is_executable():
     assert script.stat().st_mode & 0o111, "scripts/set-version.sh is not executable"
 
 
-@pytest.mark.parametrize("path", ["healthcheck.py", "healthcheck.conf.example"])
+@pytest.mark.parametrize("path", ["healthcheck.py", "healthcheck.conf.base"])
 def test_headers_do_not_carry_a_hardcoded_version(path):
     """These two used to say 'v2.0' and were wrong for three releases. The
     report prints hc.utils.VERSION at runtime; nothing else needs a copy."""

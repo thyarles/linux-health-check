@@ -12,7 +12,7 @@
 UV      := uv
 PYTHON  := /usr/bin/python3
 # The complete set of paths that go to a server. Everything else is dev-only.
-RUNTIME := healthcheck.py hc healthcheck.conf.example
+RUNTIME := healthcheck.py hc healthcheck.conf.base
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -74,5 +74,5 @@ deploy:  ## Copy the runtime files to a server (requires HOST=user@host)
 	@echo ""
 	@echo "  Copied. On the server, still to do:"
 	@echo "    cd /opt/healthcheck && python3 healthcheck.py bootstrap"
-	@echo "    cp healthcheck.conf.example healthcheck.conf && \$$EDITOR healthcheck.conf"
+	@echo "    python3 healthcheck.py config init && \$$EDITOR healthcheck.conf"
 	@echo "    python3 healthcheck.py crontab 07:00"

@@ -220,5 +220,6 @@ __marimo__/
 # State and report
 state/
 healthcheck.conf
+healthcheck.conf.bak
 reports/
 tmp

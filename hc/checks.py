@@ -891,7 +891,7 @@ def _k8s_pod_rows(s: Section, cfg: configparser.ConfigParser, kc: str, me: dict)
         elif low.startswith("init:") or low in _K8S_SETTLING:
             st = CAUTION if p["age_s"] > pend_s else INFO
         elif low == "running" and p["ready_of"] and p["ready_n"] < p["ready_of"]:
-            # A pod that restarted thirty seconds before the 07:00 cron is 0/1
+            # A pod that restarted thirty seconds before the 00:07 cron is 0/1
             # for a moment. Only a pod still degraded on the next run is news.
             degraded.append(key)
             st = CAUTION if key in prev_deg else INFO

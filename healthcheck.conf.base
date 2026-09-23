@@ -1,11 +1,21 @@
-# healthcheck.conf — Linux Health Check
-# =============================================================
-# Copy this file to healthcheck.conf in the same directory as
-# healthcheck.py and edit the values below for this server.
+# healthcheck.conf.base — shipped defaults for Linux Health Check
+# ==============================================================
+# DO NOT EDIT. Every upgrade overwrites this file.
 #
-# Each server should have its own healthcheck.conf with the
-# appropriate email recipients for that environment.
-# =============================================================
+# This is the base layer the application reads on every run. Your
+# own settings go in healthcheck.conf beside it, which holds ONLY
+# what you want to be different — anything you put there wins over
+# the value here, and anything you leave out is taken from here.
+#
+# That is what lets an upgrade deliver a new setting: it appears
+# in this file with a working default and your healthcheck.conf is
+# never touched.
+#
+#   healthcheck.py config show     what this host is actually using,
+#                                  and which layer each value came from
+#   healthcheck.py config set smtp.host=relay.example.com
+#                                  write one override into healthcheck.conf
+# ==============================================================
 
 [general]
 # The name this host calls itself in the report header, the email subject and
@@ -55,8 +65,12 @@ password =
 # itself is alive. They receive a message on EVERY run, even when
 # everything is fine ("[daily] ... all clear"). This is the
 # "the monitoring is working" signal. Keep this list short.
-daily_recipients = ops.a@domain.com,
-                   ops.b@domain.com
+#
+# Comma separated; a long list may be wrapped onto indented lines:
+#   daily_recipients = ops.a@domain.com,
+#                      ops.b@domain.com
+# Empty here on purpose — set it in healthcheck.conf.
+daily_recipients =
 
 # EVERYONE — the broad audience. They are only written to when the
 # run finds something NEW or something that got WORSE (subject is
@@ -66,8 +80,10 @@ daily_recipients = ops.a@domain.com,
 #
 # This is the whole point: if a message reaches this list, it is
 # because something actually changed.
-alert_recipients = team@domain.com,
-                   manager@domain.com
+#
+# Empty here on purpose — set it in healthcheck.conf. With no list
+# configured the run degrades to a heartbeat and says so.
+alert_recipients =
 
 # How the HTML report reaches the reader:
 #   inline     — rendered in the message body (recommended; people read it)
@@ -214,7 +230,35 @@ k8s_max_pods = 2000
 [crontab]
 # Default run time used when you call: python3 healthcheck.py crontab
 # You can override it by passing the time as argument: crontab 06:30
-time = 07:00
+time = 00:07
+
+# Spread the run out instead of starting it exactly on the hour.
+#
+# Every host installs the same cron time, so at 00:07 a whole fleet starts
+# reading /proc, walking /etc and shelling out to df, dnf and kubectl at once —
+# on servers that are frequently still inside their backup window. The check
+# then reports the CPU spike it caused itself, and that alert goes to people
+# for whom 00:07 CPU is entirely expected.
+#
+# With this on, cron still fires at `time` above and the run then waits a
+# random slice of `random_window` before touching anything, re-drawn every
+# night. `crontab -l` keeps showing one fixed, readable time, and the chosen
+# delay is written to /var/log/healthcheck.log the moment the job starts, so a
+# waiting host is never mistaken for a hung one.
+#
+# Only the cron run waits. `healthcheck.py run` typed by hand starts at once.
+random = true
+
+# How long after `time` the run may start: 8h, 90m, 2h30m — or a bare number,
+# read as hours. With time = 00:07 and 8h, the checks begin somewhere in
+# 00:07–08:07. Set random = false above to always start on the hour.
+#
+# Keep `time` + this window inside one calendar day. The log checks (failed
+# SSH, kernel errors, service failures) only count TODAY's entries, so a run
+# that is pushed past midnight reports on a day that is minutes old and finds
+# almost nothing. time = 23:00 with an 8h window is the way to get a silent,
+# useless report — not a late one.
+random_window = 8h
 
 # Interpreter the cron entry runs under. Leave blank to use whichever python
 # ran `healthcheck.py crontab` (correct for miniconda / /opt standalone builds

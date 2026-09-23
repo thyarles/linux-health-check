@@ -10,8 +10,13 @@
 #   # any other tag
 #   curl -fsSL https://raw.githubusercontent.com/thyarles/linux-health-check/main/install.sh | bash -s -- v2.0.1
 #
+#   # set values while installing or upgrading, repeatable
+#   ... | bash -s -- v2.2.0 --set crontab.time=06:30 --set crontab.random_window=2h
+#
 # Needs no git and no GitHub API: the source arrives as a release tarball.
-# Re-runnable — healthcheck.conf, state/ and reports/ survive upgrades.
+# Re-runnable — healthcheck.conf, state/ and reports/ survive upgrades, and new
+# settings reach an upgraded host through healthcheck.conf.base without the
+# operator's own file being touched.
 #
 # Env overrides: REPO_TAG REPO_SLUG APP_DIR CONDA_PREFIX_DIR MAIL_DOMAIN CRON_TIME
 #                DOWNLOADER (curl|wget) — force one if the other is broken
@@ -26,7 +31,6 @@ REPO_SLUG="${REPO_SLUG:-thyarles/linux-health-check}"
 # that API allows 60 unauthenticated calls/hour per IP, which a shared office
 # NAT exhausts, and the install then fails for everyone behind it.
 DEFAULT_TAG="v2.1.1"
-REPO_TAG="${REPO_TAG:-${1:-$DEFAULT_TAG}}"
 APP_DIR="${APP_DIR:-/root/linux-health-check}"
 MAIL_DOMAIN="${MAIL_DOMAIN:-mpt.mp.br}"
 CRON_TIME="${CRON_TIME:-}"
@@ -36,9 +40,35 @@ RAW_URL="https://raw.githubusercontent.com/$REPO_SLUG/main/install.sh"
 say() { printf '\n==> %s\n' "$*"; }
 die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
-case "${1:-}" in
-    -h|--help) sed -n '2,17p' "$0" | sed 's/^#\ \?//'; printf 'Default tag: %s\n' "$DEFAULT_TAG"; exit 0 ;;
-esac
+# Arguments: an optional tag, and any number of --set section.key=value pairs
+# that are written into healthcheck.conf after the code is in place. The pairs
+# are validated by `config set` against the settings the release actually
+# reads, so a typo stops the install instead of becoming a line that does
+# nothing.
+TAG_ARG=""
+SETS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help)
+            sed -n '2,23p' "$0" | sed 's/^#\ \?//'
+            printf 'Default tag: %s\n' "$DEFAULT_TAG"; exit 0 ;;
+        --set)
+            shift; [ $# -gt 0 ] || die "--set needs section.key=value"
+            SETS+=("$1") ;;
+        --set=*) SETS+=("${1#--set=}") ;;
+        -*) die "unknown option '$1'. Use --set section.key=value, or --help." ;;
+        *)  [ -z "$TAG_ARG" ] || die "two tags given: '$TAG_ARG' and '$1'."
+            TAG_ARG="$1" ;;
+    esac
+    shift
+done
+REPO_TAG="${REPO_TAG:-${TAG_ARG:-$DEFAULT_TAG}}"
+
+# CRON_TIME is the older way to say the same thing. Routing it through --set
+# means it is now PERSISTED in healthcheck.conf rather than applied to the cron
+# entry and forgotten, so the next upgrade keeps the time this host chose.
+[ -n "$CRON_TIME" ] && SETS+=("crontab.time=$CRON_TIME")
+
 [ "$(id -u)" -eq 0 ] || die "must run as root (paths under /root)."
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -81,7 +111,7 @@ else
     bash "$TMP/miniconda.sh" -b -p "$CONDA_PREFIX_DIR" >/dev/null
     [ -x "$PY" ] || die "installer finished but $PY is missing."
 fi
-# Fail loudly here rather than from cron at 07:00 if glibc is too old for it.
+# Fail loudly here rather than from cron at 00:07 if glibc is too old for it.
 "$PY" -V >/dev/null 2>&1 || die "$PY will not execute (glibc too old for this Miniconda build?)"
 say "Interpreter: $PY ($("$PY" -V 2>&1))"
 
@@ -108,22 +138,41 @@ mkdir -p "$APP_DIR"
 rm -rf "$APP_DIR/hc"
 cp -a "$TMP/x/." "$APP_DIR/"
 printf '%s\n' "$REPO_TAG" > "$APP_DIR/.installed-version"
+# Tags up to v2.1.1 shipped healthcheck.conf.example, which the operator was
+# told to copy. It is now healthcheck.conf.base and the program reads it
+# directly, so leaving the old file behind on an upgraded host leaves two
+# plausible-looking files that disagree.
+rm -f "$APP_DIR/healthcheck.conf.example"
 [ -d "$APP_DIR/.git" ] && say "Note: $APP_DIR/.git is left over from a git install and is no longer used."
 
 # ------------------------------------------------------------------ 3. Config
 CONF="$APP_DIR/healthcheck.conf"
+
+# healthcheck.conf.base was just replaced along with the code, and it carries
+# every default this release ships. healthcheck.conf holds only what this host
+# overrides and is never rewritten — a setting added in $REPO_TAG reaches the
+# host through the base layer, so there is nothing to migrate.
 if [ -f "$CONF" ]; then
-    say "Config already exists — left untouched: $CONF"
+    say "Config kept as-is: $CONF"
+    printf '    New settings in %s arrive via healthcheck.conf.base.\n' "$REPO_TAG"
+    printf '    See them with: %s %s/healthcheck.py config show\n' "$PY" "$APP_DIR"
 else
-    say "Creating config with domain.com -> $MAIL_DOMAIN"
-    sed "s/domain\.com/$MAIL_DOMAIN/g" "$APP_DIR/healthcheck.conf.example" > "$CONF"
-    chmod 600 "$CONF"   # it will hold SMTP credentials
-    grep -n "$MAIL_DOMAIN" "$CONF" | sed 's/^/    /'
+    say "Creating $CONF for domain $MAIL_DOMAIN"
+    "$PY" "$APP_DIR/healthcheck.py" config init "--mail-domain=$MAIL_DOMAIN"
+fi
+
+# Applied to a fresh and an upgraded host alike: this is how an install line
+# carries a host's settings with it.
+if [ ${#SETS[@]} -gt 0 ]; then
+    say "Applying ${#SETS[@]} setting(s) from --set"
+    "$PY" "$APP_DIR/healthcheck.py" config set "${SETS[@]}"
 fi
 
 # ------------------------------------------------------------------ 4. Crontab
+# No time argument: the entry is built from [crontab] time in the merged
+# config, which is where --set and CRON_TIME have just put it. One source.
 say "Installing cron entry"
-"$PY" "$APP_DIR/healthcheck.py" crontab ${CRON_TIME:+"$CRON_TIME"}
+"$PY" "$APP_DIR/healthcheck.py" crontab
 
 say "Verifying the installed cron entry"
 entry="$(crontab -l 2>/dev/null | grep -F 'linux-healthcheck-managed' || true)"
@@ -138,5 +187,8 @@ case "$entry" in
      The cron entry is wrong until you do; 'crontab -e' to remove it by hand." ;;
 esac
 
-say "Installed $REPO_TAG. Review $CONF (SMTP host, recipients), then preview with:"
+say "Installed $REPO_TAG. Set the recipients if you have not yet:"
+printf '    %s %s/healthcheck.py config set email.daily_recipients=ops@%s\n' "$PY" "$APP_DIR" "$MAIL_DOMAIN"
+printf '  Then check what this host will do, and preview a report:\n'
+printf '    %s %s/healthcheck.py config show --diff\n' "$PY" "$APP_DIR"
 printf '    %s %s/healthcheck.py text\n\n' "$PY" "$APP_DIR"

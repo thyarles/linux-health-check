@@ -7,13 +7,21 @@ it is deliberately not repeated here, where it only ever went stale.
 
 Usage:
   healthcheck.py [run]             Run all checks and send emails (default)
+  healthcheck.py run --scheduled   As above, but honour [crontab] random —
+                                   this is the form the cron entry installs
   healthcheck.py report            Print HTML report to stdout, no emails sent
   healthcheck.py text              Print formatted text report to stdout
   healthcheck.py bootstrap         Check and install required system tools
-  healthcheck.py crontab [HH:MM]   Install/update crontab entry (default 07:00)
+  healthcheck.py crontab [HH:MM]   Install/update crontab entry (default 00:07)
+  healthcheck.py config show       Every effective setting and which layer it
+                                   came from; --diff for overrides only
+  healthcheck.py config set K=V    Write an override into healthcheck.conf,
+                                   e.g. config set crontab.time=06:30
+  healthcheck.py config init       Create the starter healthcheck.conf
 
-Config: healthcheck.conf in the same directory as this script.
-Copy healthcheck.conf.example to healthcheck.conf and edit as needed.
+Config: healthcheck.conf.base holds the shipped defaults and is replaced by
+every upgrade; healthcheck.conf beside it holds only this host's overrides and
+is never touched. The second wins over the first.
 """
 
 import datetime
@@ -34,6 +42,8 @@ from hc.report    import generate_html, generate_text, _COLORS
 from hc.mailer    import send_email
 from hc.bootstrap import bootstrap
 from hc.crontab   import install_crontab
+from hc.schedule  import apply_delay
+from hc import config as config_cli
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -134,6 +144,9 @@ def main() -> None:
         install_crontab(args[1] if len(args) > 1 else "")
         return
 
+    if mode == "config":
+        sys.exit(config_cli.main(args[1:]))
+
     if mode not in ("run", "report", "text"):
         print(__doc__)
         sys.exit(1)
@@ -145,6 +158,11 @@ def main() -> None:
 
     cfg      = load_config()
     hostname = host_label()
+
+    # Before any measurement: a delay taken after the checks would defeat the
+    # point, which is to move the LOAD off the hour, not the email.
+    if mode == "run" and "--scheduled" in args[1:]:
+        apply_delay(cfg)
 
     print(f"[{datetime.datetime.now():%Y-%m-%d %H:%M:%S}] Running health checks on {hostname}...", file=sys.stderr)
     sections, overall, alerts = run_all_checks(cfg)
