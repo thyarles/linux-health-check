@@ -328,16 +328,16 @@ def builtin_defaults() -> dict:
             "k8s_max_pods": "2000",
         },
         "crontab": {
-            "time": "07:00",
-            # Whole fleets install the same cron time, so at 07:00 every host
+            "time": "00:07",
+            # Whole fleets install the same cron time, so at 00:07 every host
             # starts a full scan at once — often on top of the backup window,
             # which the check then reports as the CPU spike it caused itself.
             # The entry still fires on the hour; the run waits a random slice
             # of the window below before touching anything. A run started by
             # hand is never delayed.
             "random":        "true",
-            # 4h, 90m, 2h30m — or a bare number, read as hours.
-            "random_window": "4h",
+            # 8h, 90m, 2h30m — or a bare number, read as hours.
+            "random_window": "8h",
         },
     }
 

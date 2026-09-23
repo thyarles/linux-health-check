@@ -234,11 +234,11 @@ time = 00:07
 
 # Spread the run out instead of starting it exactly on the hour.
 #
-# Every host installs the same cron time, so at 07:00 a whole fleet starts
+# Every host installs the same cron time, so at 00:07 a whole fleet starts
 # reading /proc, walking /etc and shelling out to df, dnf and kubectl at once —
 # on servers that are frequently still inside their backup window. The check
 # then reports the CPU spike it caused itself, and that alert goes to people
-# for whom 07:00 CPU is entirely expected.
+# for whom 00:07 CPU is entirely expected.
 #
 # With this on, cron still fires at `time` above and the run then waits a
 # random slice of `random_window` before touching anything, re-drawn every
@@ -249,14 +249,14 @@ time = 00:07
 # Only the cron run waits. `healthcheck.py run` typed by hand starts at once.
 random = true
 
-# How long after `time` the run may start: 4h, 90m, 2h30m — or a bare number,
-# read as hours. With time = 07:00 and 4h, the checks begin somewhere in
-# 07:00–11:00. Set random = false above to always start on the hour.
+# How long after `time` the run may start: 8h, 90m, 2h30m — or a bare number,
+# read as hours. With time = 00:07 and 8h, the checks begin somewhere in
+# 00:07–08:07. Set random = false above to always start on the hour.
 #
 # Keep `time` + this window inside one calendar day. The log checks (failed
 # SSH, kernel errors, service failures) only count TODAY's entries, so a run
 # that is pushed past midnight reports on a day that is minutes old and finds
-# almost nothing. time = 23:00 with a 4h window is the way to get a silent,
+# almost nothing. time = 23:00 with an 8h window is the way to get a silent,
 # useless report — not a late one.
 random_window = 8h
 

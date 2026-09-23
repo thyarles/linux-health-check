@@ -1,10 +1,10 @@
 """Spread the scheduled run over a window instead of firing on the hour.
 
-Every host in a fleet installs the same cron time, so at 07:00 every one of
+Every host in a fleet installs the same cron time, so at 00:07 every one of
 them starts reading /proc, walking /etc, shelling out to df, dnf and kubectl —
 on servers that are frequently also running their backup window. The health
 check then reports the CPU spike it caused itself, and the alert lands on a
-list of people for whom 07:00 CPU is entirely expected.
+list of people for whom 00:07 CPU is entirely expected.
 
 So the cron entry still fires on the hour and the RUN sleeps a random slice of
 the window before touching anything. Same idea as systemd's RandomizedDelaySec.
@@ -26,7 +26,7 @@ import re
 import sys
 import time
 
-DEFAULT_WINDOW = "4h"
+DEFAULT_WINDOW = "8h"
 
 _UNITS = {"h": 3600, "m": 60, "s": 1}
 _TOKEN = re.compile(r"(\d+(?:\.\d+)?)\s*([hms])", re.I)
@@ -36,7 +36,7 @@ def parse_window(value: str) -> int:
     """Window written as 4h, 90m, 2h30m or a bare number of HOURS, in seconds.
 
     A bare number means hours because that is the unit the schedule is
-    discussed in ("run some time in the four hours after 07:00"). Raises
+    discussed in ("run some time in the eight hours after 00:07"). Raises
     ValueError on anything it cannot read, so the caller decides what a typo
     in the config should cost.
     """
@@ -71,7 +71,7 @@ def window_seconds(cfg) -> int:
     A malformed value deliberately falls back to DEFAULT_WINDOW rather than to
     no delay: `random = true` says the operator wants the fleet spread out, and
     a typo in the window is a poor reason to send every host back to hitting
-    07:00 together. The warning goes to the cron log either way.
+    00:07 together. The warning goes to the cron log either way.
     """
     raw = str(cfg.get("crontab", "random_window", fallback=DEFAULT_WINDOW)).strip()
     try:
@@ -116,8 +116,8 @@ def apply_delay(cfg, sleep=time.sleep, now=datetime.datetime.now) -> int:
     """Announce and serve the delay. Returns the seconds actually waited.
 
     The announcement is printed BEFORE the sleep and flushed, so `tail -f
-    /var/log/healthcheck.log` at 07:30 shows a host that is waiting rather than
-    a host that is broken. That matters: without it, a four-hour silence
+    /var/log/healthcheck.log` at 02:30 shows a host that is waiting rather than
+    a host that is broken. That matters: without it, an eight-hour silence
     between the cron fire and the first check looks exactly like a hang.
     """
     stamp = f"[{now():%Y-%m-%d %H:%M:%S}]"

@@ -111,7 +111,7 @@ else
     bash "$TMP/miniconda.sh" -b -p "$CONDA_PREFIX_DIR" >/dev/null
     [ -x "$PY" ] || die "installer finished but $PY is missing."
 fi
-# Fail loudly here rather than from cron at 07:00 if glibc is too old for it.
+# Fail loudly here rather than from cron at 00:07 if glibc is too old for it.
 "$PY" -V >/dev/null 2>&1 || die "$PY will not execute (glibc too old for this Miniconda build?)"
 say "Interpreter: $PY ($("$PY" -V 2>&1))"
 

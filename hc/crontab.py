@@ -35,11 +35,11 @@ def resolve_python(cfg: "configparser.ConfigParser | None" = None) -> str:
 def install_crontab(time_str: str = "") -> None:
     cfg = load_config()
     if not time_str:
-        time_str = cfg.get("crontab", "time", fallback="07:00")
+        time_str = cfg.get("crontab", "time", fallback="00:07")
 
     m = re.fullmatch(r"(\d{1,2}):(\d{2})", time_str)
     if not m:
-        sys.exit(f"Invalid time '{time_str}'. Use HH:MM (e.g. 07:00).")
+        sys.exit(f"Invalid time '{time_str}'. Use HH:MM (e.g. 00:07).")
 
     hour, minute = m.group(1).zfill(2), m.group(2)
     py3  = resolve_python(cfg)

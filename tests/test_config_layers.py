@@ -97,7 +97,7 @@ def test_a_missing_base_file_falls_through_to_the_built_in_floor(monkeypatch, tm
     monkeypatch.setattr(hc.utils, "BASE_PATH", tmp_path / "absent.base")
     monkeypatch.setattr(hc.utils, "CONFIG_PATH", tmp_path / "absent.conf")
     cfg = load_config()
-    assert cfg.get("crontab", "time") == "07:00"
+    assert cfg.get("crontab", "time") == "00:07"
     assert cfg.get("thresholds", "cpu_caution") == "80"
 
 

@@ -57,16 +57,16 @@ def test_unreadable_windows_are_rejected(junk):
 
 def test_a_typo_in_the_window_falls_back_to_the_default_not_to_zero(capsys):
     """`random = true` says the operator wants the fleet spread out. A typo in
-    the window is a bad reason to send every host back to hitting 07:00
+    the window is a bad reason to send every host back to hitting 00:07
     together, so the default window stands in — loudly."""
-    assert schedule.window_seconds(cfg(random_window="4 hours!")) == 4 * 3600
+    assert schedule.window_seconds(cfg(random_window="4 hours!")) == 8 * 3600
     assert "random_window" in capsys.readouterr().err
 
 
 def test_the_delay_is_on_by_default_for_a_config_that_never_heard_of_it():
     """An upgraded host whose healthcheck.conf predates the setting."""
     assert schedule.enabled(configparser.ConfigParser()) is True
-    assert schedule.window_seconds(configparser.ConfigParser()) == 4 * 3600
+    assert schedule.window_seconds(configparser.ConfigParser()) == 8 * 3600
 
 
 def test_disabling_it_means_no_delay_at_all():

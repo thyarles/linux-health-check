@@ -12,7 +12,7 @@ Usage:
   healthcheck.py report            Print HTML report to stdout, no emails sent
   healthcheck.py text              Print formatted text report to stdout
   healthcheck.py bootstrap         Check and install required system tools
-  healthcheck.py crontab [HH:MM]   Install/update crontab entry (default 07:00)
+  healthcheck.py crontab [HH:MM]   Install/update crontab entry (default 00:07)
   healthcheck.py config show       Every effective setting and which layer it
                                    came from; --diff for overrides only
   healthcheck.py config set K=V    Write an override into healthcheck.conf,

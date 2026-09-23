@@ -101,7 +101,7 @@ installed tag is recorded in `.installed-version`.
 | `APP_DIR` | `/root/linux-health-check` | Where the code lands |
 | `CONDA_PREFIX_DIR` | `/root/miniconda3` | Where the private Python lands |
 | `MAIL_DOMAIN` | `domain.com` | Domain used for the relay host in a newly created config |
-| `CRON_TIME` | `07:00` | Daily run time — shorthand for `--set crontab.time=...`, and now persisted in `healthcheck.conf` |
+| `CRON_TIME` | `00:07` | Daily run time — shorthand for `--set crontab.time=...`, and now persisted in `healthcheck.conf` |
 | `REPO_SLUG` | `thyarles/linux-health-check` | Source repo |
 | `DOWNLOADER` | auto | Force `curl` or `wget` when the other is broken |
 
@@ -143,10 +143,10 @@ python3 healthcheck.py config set email.daily_recipients=ops@example.com
 python3 healthcheck.py report > /tmp/report.html
 # Open /tmp/report.html in a browser to review
 
-# 5. Install the daily cron job (default 07:00, or pass HH:MM)
-#    The run starts at a random point in the 4h after this time — see
+# 5. Install the daily cron job (default 00:07, or pass HH:MM)
+#    The run starts at a random point in the 8h after this time — see
 #    "Random start delay" below, or set [crontab] random = false.
-python3 healthcheck.py crontab 07:00
+python3 healthcheck.py crontab 00:07
 crontab -l | grep healthcheck   # verify
 ```
 
@@ -179,28 +179,28 @@ baselines the scheduled run depends on.
 
 ### Random start delay
 
-Every host installs the same cron time, so at 07:00 a whole fleet begins a full
+Every host installs the same cron time, so at 00:07 a whole fleet begins a full
 scan at once — frequently on top of the backup window. The check then reports
-the CPU spike it caused itself, to people for whom 07:00 CPU is expected.
+the CPU spike it caused itself, to people for whom 00:07 CPU is expected.
 
 With `[crontab] random` on (the default), cron still fires at `time` and the run
 waits a random slice of `random_window` before touching anything:
 
 ```ini
 [crontab]
-time          = 07:00
+time          = 00:07
 random        = true
-random_window = 4h      # 4h, 90m, 2h30m — a bare number means hours
+random_window = 8h      # 8h, 90m, 2h30m — a bare number means hours
 ```
 
 `crontab -l` keeps showing one fixed, readable time; only the run moves, and the
-draw is fresh every night, so today's 07:05 host is not tomorrow's. The delay is
+draw is fresh every night, so today's 00:12 host is not tomorrow's. The delay is
 logged the moment the job starts, so a waiting host is never mistaken for a hung
 one:
 
 ```
-[2026-09-21 07:00:01] Random delay 2h37m of a 4h00m window — checks start at 09:37
-[2026-09-21 09:37:02] Running health checks on hst-exp03.domain.com...
+[2026-09-21 00:07:01] Random delay 2h37m of an 8h00m window — checks start at 02:44
+[2026-09-21 02:44:02] Running health checks on hst-exp03.domain.com...
 ```
 
 Only the cron run waits — `healthcheck.py run` typed at a prompt starts
@@ -229,7 +229,7 @@ $ python3 healthcheck.py config show
   [crontab]
   * time                       06:30            healthcheck.conf     ← yours
     random                     true             healthcheck.conf.base ← new in this release
-    random_window              4h               healthcheck.conf.base
+    random_window              8h               healthcheck.conf.base
 ```
 
 `config show --diff` lists only your overrides — a one-screen answer to "what
