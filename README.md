@@ -1,5 +1,12 @@
 # Linux Health Check
 
+> # Project Archived.
+>
+> 1. Reason: Python was too hard to install on pythonless devices, so we migrate this ideia to Go Language.
+> 2. Port of this project in Go Language in https://github.com/thyarles/lhc
+>    
+> Thank you for your support.
+
 Daily server health and security monitoring script. Runs all checks, saves a report, and mails **two audiences that are asked two different questions**:
 
 - **`daily_recipients`** — a small selected group. Gets a message on every run, including "all clear". This is the *the monitoring itself is alive* signal.
